@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod chunker;
 pub mod embeddings;
+pub mod graph_traits;
 pub mod hygiene;
 pub mod lucid;
 pub mod markdown;
@@ -9,6 +10,7 @@ pub mod response_cache;
 pub mod snapshot;
 pub mod sqlite;
 pub mod synapse;
+pub mod synapse_domain_adapter;
 pub mod traits;
 pub mod vector;
 
@@ -17,6 +19,7 @@ pub use backend::{
     classify_memory_backend, default_memory_backend_key, memory_backend_profile,
     selectable_memory_backends, MemoryBackendKind, MemoryBackendProfile,
 };
+pub use graph_traits::GraphMemory;
 pub use lucid::LucidMemory;
 pub use markdown::MarkdownMemory;
 pub use none::NoneMemory;
