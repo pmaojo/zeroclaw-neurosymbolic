@@ -8,6 +8,7 @@ pub mod none;
 pub mod response_cache;
 pub mod snapshot;
 pub mod sqlite;
+pub mod synapse;
 pub mod traits;
 pub mod vector;
 
@@ -21,6 +22,7 @@ pub use markdown::MarkdownMemory;
 pub use none::NoneMemory;
 pub use response_cache::ResponseCache;
 pub use sqlite::SqliteMemory;
+pub use synapse::SynapseMemory;
 pub use traits::Memory;
 #[allow(unused_imports)]
 pub use traits::{MemoryCategory, MemoryEntry};
@@ -43,6 +45,20 @@ where
         MemoryBackendKind::Lucid => {
             let local = sqlite_builder()?;
             Ok(Box::new(LucidMemory::new(workspace_dir, local)))
+        }
+        MemoryBackendKind::Synapse => {
+            let local = sqlite_builder()?;
+            match SynapseMemory::new(workspace_dir, local) {
+                Ok(memory) => Ok(Box::new(memory)),
+                Err(error) => {
+                    tracing::warn!(
+                        backend = "synapse",
+                        error = %error,
+                        "Synapse backend initialization failed; falling back to sqlite"
+                    );
+                    Ok(Box::new(sqlite_builder()?))
+                }
+            }
         }
         MemoryBackendKind::Markdown => Ok(Box::new(MarkdownMemory::new(workspace_dir))),
         MemoryBackendKind::None => Ok(Box::new(NoneMemory::new())),
@@ -78,7 +94,7 @@ pub fn create_memory(
     if config.auto_hydrate
         && matches!(
             classify_memory_backend(&config.backend),
-            MemoryBackendKind::Sqlite | MemoryBackendKind::Lucid
+            MemoryBackendKind::Sqlite | MemoryBackendKind::Lucid | MemoryBackendKind::Synapse
         )
         && snapshot::should_hydrate(workspace_dir)
     {
@@ -218,6 +234,22 @@ mod tests {
         };
         let mem = create_memory(&cfg, tmp.path(), None).unwrap();
         assert_eq!(mem.name(), "none");
+    }
+
+    #[test]
+    fn factory_synapse_uses_backend_or_explicit_sqlite_fallback() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = MemoryConfig {
+            backend: "synapse".into(),
+            ..MemoryConfig::default()
+        };
+        let mem = create_memory(&cfg, tmp.path(), None).unwrap();
+
+        #[cfg(feature = "memory-synapse")]
+        assert_eq!(mem.name(), "synapse");
+
+        #[cfg(not(feature = "memory-synapse"))]
+        assert_eq!(mem.name(), "sqlite");
     }
 
     #[test]

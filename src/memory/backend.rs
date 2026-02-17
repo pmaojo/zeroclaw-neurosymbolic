@@ -2,6 +2,7 @@
 pub enum MemoryBackendKind {
     Sqlite,
     Lucid,
+    Synapse,
     Markdown,
     None,
     Unknown,
@@ -45,6 +46,15 @@ const MARKDOWN_PROFILE: MemoryBackendProfile = MemoryBackendProfile {
     optional_dependency: false,
 };
 
+const SYNAPSE_PROFILE: MemoryBackendProfile = MemoryBackendProfile {
+    key: "synapse",
+    label: "Synapse Engine bridge — use Synapse runtime with explicit SQLite fallback",
+    auto_save_default: true,
+    uses_sqlite_hygiene: true,
+    sqlite_based: true,
+    optional_dependency: true,
+};
+
 const NONE_PROFILE: MemoryBackendProfile = MemoryBackendProfile {
     key: "none",
     label: "None — disable persistent memory",
@@ -63,9 +73,10 @@ const CUSTOM_PROFILE: MemoryBackendProfile = MemoryBackendProfile {
     optional_dependency: false,
 };
 
-const SELECTABLE_MEMORY_BACKENDS: [MemoryBackendProfile; 4] = [
+const SELECTABLE_MEMORY_BACKENDS: [MemoryBackendProfile; 5] = [
     SQLITE_PROFILE,
     LUCID_PROFILE,
+    SYNAPSE_PROFILE,
     MARKDOWN_PROFILE,
     NONE_PROFILE,
 ];
@@ -82,6 +93,7 @@ pub fn classify_memory_backend(backend: &str) -> MemoryBackendKind {
     match backend {
         "sqlite" => MemoryBackendKind::Sqlite,
         "lucid" => MemoryBackendKind::Lucid,
+        "synapse" => MemoryBackendKind::Synapse,
         "markdown" => MemoryBackendKind::Markdown,
         "none" => MemoryBackendKind::None,
         _ => MemoryBackendKind::Unknown,
@@ -92,6 +104,7 @@ pub fn memory_backend_profile(backend: &str) -> MemoryBackendProfile {
     match classify_memory_backend(backend) {
         MemoryBackendKind::Sqlite => SQLITE_PROFILE,
         MemoryBackendKind::Lucid => LUCID_PROFILE,
+        MemoryBackendKind::Synapse => SYNAPSE_PROFILE,
         MemoryBackendKind::Markdown => MARKDOWN_PROFILE,
         MemoryBackendKind::None => NONE_PROFILE,
         MemoryBackendKind::Unknown => CUSTOM_PROFILE,
@@ -107,6 +120,10 @@ mod tests {
         assert_eq!(classify_memory_backend("sqlite"), MemoryBackendKind::Sqlite);
         assert_eq!(classify_memory_backend("lucid"), MemoryBackendKind::Lucid);
         assert_eq!(
+            classify_memory_backend("synapse"),
+            MemoryBackendKind::Synapse
+        );
+        assert_eq!(
             classify_memory_backend("markdown"),
             MemoryBackendKind::Markdown
         );
@@ -121,11 +138,12 @@ mod tests {
     #[test]
     fn selectable_backends_are_ordered_for_onboarding() {
         let backends = selectable_memory_backends();
-        assert_eq!(backends.len(), 4);
+        assert_eq!(backends.len(), 5);
         assert_eq!(backends[0].key, "sqlite");
         assert_eq!(backends[1].key, "lucid");
-        assert_eq!(backends[2].key, "markdown");
-        assert_eq!(backends[3].key, "none");
+        assert_eq!(backends[2].key, "synapse");
+        assert_eq!(backends[3].key, "markdown");
+        assert_eq!(backends[4].key, "none");
     }
 
     #[test]
@@ -142,5 +160,13 @@ mod tests {
         assert_eq!(profile.key, "custom");
         assert!(profile.auto_save_default);
         assert!(!profile.uses_sqlite_hygiene);
+    }
+
+    #[test]
+    fn synapse_profile_is_sqlite_based_optional_backend() {
+        let profile = memory_backend_profile("synapse");
+        assert!(profile.sqlite_based);
+        assert!(profile.optional_dependency);
+        assert!(profile.uses_sqlite_hygiene);
     }
 }

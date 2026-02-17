@@ -3666,6 +3666,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "synapse-engine"
+version = "0.1.0"
+
+[[package]]
 name = "sync_wrapper"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5121,6 +5125,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shellexpand",
+ "synapse-engine",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
