@@ -1,21 +1,23 @@
+#[cfg(feature = "memory-synapse")]
+pub mod graph_adapter;
 pub mod ontology;
 
 use super::graph_traits::{
-    GraphEdge, GraphEdgeUpsert, GraphMemory, GraphNode, GraphNodeUpsert, GraphSearchResult,
-    NeighborhoodQuery, NodeId, RelationType, SemanticGraphQuery, SynapseNodeType,
+    GraphEdge, GraphEdgeUpsert, GraphMemory, GraphNodeUpsert, GraphSearchResult, NeighborhoodQuery,
+    SemanticGraphQuery,
 };
 #[cfg(feature = "memory-synapse")]
 use super::sqlite::SqliteMemory;
 use super::traits::{Memory, MemoryCategory, MemoryEntry};
 use async_trait::async_trait;
 #[cfg(feature = "memory-synapse")]
-use serde_json::Value;
+use graph_adapter::{SynapseGraphAdapter, SynapseGraphAdapterPort};
 use std::path::Path;
 use std::sync::Arc;
 
 // Conditional compilation imports
 #[cfg(feature = "memory-synapse")]
-use crate::memory::synapse::ontology::{classes, namespaces, properties};
+use crate::memory::synapse::ontology::namespaces;
 #[cfg(feature = "memory-synapse")]
 use synapse_core::scenarios::ScenarioManager;
 #[cfg(feature = "memory-synapse")]
@@ -28,6 +30,8 @@ pub struct SynapseMemory {
     store: Arc<SynapseStore>,
     #[cfg(feature = "memory-synapse")]
     scenario_manager: Arc<ScenarioManager>,
+    #[cfg(feature = "memory-synapse")]
+    graph_adapter: Arc<dyn SynapseGraphAdapterPort>,
     // Fallback for when feature is disabled, or for non-graph persistence
     #[cfg(not(feature = "memory-synapse"))]
     local: std::marker::PhantomData<()>,
@@ -46,6 +50,25 @@ impl SynapseMemory {
             local,
             store: Arc::new(store),
             scenario_manager: Arc::new(scenario_manager),
+            graph_adapter: Arc::new(SynapseGraphAdapter),
+        })
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    pub fn with_adapter(
+        workspace_dir: &Path,
+        local: SqliteMemory,
+        graph_adapter: Arc<dyn SynapseGraphAdapterPort>,
+    ) -> anyhow::Result<Self> {
+        let namespace = "zeroclaw";
+        let store = SynapseStore::open(namespace, workspace_dir.to_str().unwrap())?;
+        let scenario_manager = ScenarioManager::new(workspace_dir);
+
+        Ok(Self {
+            local,
+            store: Arc::new(store),
+            scenario_manager: Arc::new(scenario_manager),
+            graph_adapter,
         })
     }
 
@@ -128,113 +151,6 @@ impl SynapseMemory {
     pub fn query_sparql(&self, query: &str) -> anyhow::Result<String> {
         Ok(self.store.query_sparql(query)?)
     }
-
-    #[cfg(feature = "memory-synapse")]
-    fn relation_to_predicate(relation: &RelationType) -> String {
-        match relation {
-            RelationType::CategoryMembership => namespaces::RDF.to_owned() + "type",
-            RelationType::DecisionConstraint => properties::RELATES_TO.to_string(),
-            RelationType::MessageLink => properties::CONTEXT_FOR.to_string(),
-            RelationType::Custom(value) => format!("{}{}", namespaces::ZEROCLAW, value),
-        }
-    }
-
-    #[cfg(feature = "memory-synapse")]
-    fn predicate_to_relation(predicate: &str) -> anyhow::Result<RelationType> {
-        if predicate == (namespaces::RDF.to_owned() + "type") {
-            return Ok(RelationType::CategoryMembership);
-        }
-        if predicate == properties::RELATES_TO {
-            return Ok(RelationType::DecisionConstraint);
-        }
-        if predicate == properties::CONTEXT_FOR {
-            return Ok(RelationType::MessageLink);
-        }
-
-        if let Some(custom) = predicate.strip_prefix(namespaces::ZEROCLAW) {
-            if custom.trim().is_empty() {
-                anyhow::bail!("custom relation predicate suffix cannot be empty");
-            }
-            return Ok(RelationType::Custom(custom.to_string()));
-        }
-
-        anyhow::bail!("unsupported predicate for relation mapping: {predicate}")
-    }
-
-    #[cfg(feature = "memory-synapse")]
-    fn node_id_from_uri(uri: &str) -> anyhow::Result<NodeId> {
-        let normalized = uri.trim().trim_start_matches('<').trim_end_matches('>');
-        let raw_id = normalized
-            .strip_prefix(namespaces::ZEROCLAW)
-            .ok_or_else(|| {
-                anyhow::anyhow!("expected node URI in zeroclaw namespace, got: {uri}")
-            })?;
-        NodeId::new(raw_id)
-    }
-
-    #[cfg(feature = "memory-synapse")]
-    fn parse_graph_edge_binding(row: &Value) -> anyhow::Result<GraphEdge> {
-        let source_uri = row
-            .get("source")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("missing 'source' binding in SPARQL row: {row}"))?;
-        let predicate_uri = row
-            .get("predicate")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("missing 'predicate' binding in SPARQL row: {row}"))?;
-        let target_uri = row
-            .get("target")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("missing 'target' binding in SPARQL row: {row}"))?;
-
-        Ok(GraphEdge {
-            source: Self::node_id_from_uri(source_uri)?,
-            target: Self::node_id_from_uri(target_uri)?,
-            relation: Self::predicate_to_relation(predicate_uri.trim_matches(['<', '>']))?,
-        })
-    }
-}
-
-#[cfg(feature = "memory-synapse")]
-fn build_neighborhood_query(query: &NeighborhoodQuery) -> String {
-    let anchor_uri = format!("<{}{}>", namespaces::ZEROCLAW, query.anchor.as_str());
-    let relation_filter = query
-        .relation
-        .as_ref()
-        .map(SynapseMemory::relation_to_predicate)
-        .map(|predicate| format!("VALUES ?predicate {{ <{}> }}", predicate))
-        .unwrap_or_default();
-
-    let where_clause = match query.direction {
-        super::graph_traits::EdgeDirection::Outbound => {
-            format!(
-                "BIND({anchor} AS ?source)\n?source ?predicate ?target .\nFILTER(isIRI(?target))",
-                anchor = anchor_uri
-            )
-        }
-        super::graph_traits::EdgeDirection::Inbound => {
-            format!(
-                "BIND({anchor} AS ?target)\n?source ?predicate ?target .\nFILTER(isIRI(?source))",
-                anchor = anchor_uri
-            )
-        }
-        super::graph_traits::EdgeDirection::Both => {
-            format!(
-                "{{\n  BIND({anchor} AS ?source)\n  ?source ?predicate ?target .\n  FILTER(isIRI(?target))\n}} UNION {{\n  BIND({anchor} AS ?target)\n  ?source ?predicate ?target .\n  FILTER(isIRI(?source))\n}}",
-                anchor = anchor_uri
-            )
-        }
-    };
-
-    if relation_filter.is_empty() {
-        format!(
-            "SELECT ?source ?predicate ?target WHERE {{\n{where_clause}\n}} ORDER BY ?source ?predicate ?target",
-        )
-    } else {
-        format!(
-            "SELECT ?source ?predicate ?target WHERE {{\n{where_clause}\n{relation_filter}\n}} ORDER BY ?source ?predicate ?target",
-        )
-    }
 }
 
 #[async_trait]
@@ -256,29 +172,9 @@ impl Memory for SynapseMemory {
             // But we *also* ingest metadata into the graph if enabled
             self.local.store(key, content, category, session_id).await?;
 
-            // Create a node for this memory entry
-            let node_uri = format!("{}Memory/{}", namespaces::ZEROCLAW, key);
-            let type_triple = (
-                node_uri.clone(),
-                namespaces::RDF.to_owned() + "type",
-                classes::MEMORY.to_string(),
-            );
-            let content_triple = (
-                node_uri.clone(),
-                properties::HAS_CONTENT.to_string(),
-                format!("\"{}\"", content.replace("\"", "\\\"")),
-            );
-
-            let mut triples = vec![type_triple, content_triple];
-
-            if let Some(sess) = session_id {
-                triples.push((
-                    node_uri.clone(),
-                    properties::CONTEXT_FOR.to_string(),
-                    format!("{}Session/{}", namespaces::ZEROCLAW, sess),
-                ));
-            }
-
+            let triples = self
+                .graph_adapter
+                .memory_store_triples(key, content, &category, session_id)?;
             self.ingest_triples(triples).await?;
             Ok(())
         }
@@ -376,37 +272,7 @@ impl GraphMemory for SynapseMemory {
     async fn upsert_node(&self, node: GraphNodeUpsert) -> anyhow::Result<()> {
         #[cfg(feature = "memory-synapse")]
         {
-            let node_uri = format!("{}{}", namespaces::ZEROCLAW, node.id.as_str());
-
-            // Map SynapseNodeType to RDF Class
-            let rdf_class = match node.node_type {
-                SynapseNodeType::Agent => classes::AGENT,
-                SynapseNodeType::DecisionRule => classes::DECISION_RULE,
-                SynapseNodeType::MemoryConversation => classes::CONVERSATION,
-                _ => classes::MEMORY, // Default
-            };
-
-            let mut triples = vec![
-                (
-                    node_uri.clone(),
-                    namespaces::RDF.to_owned() + "type",
-                    rdf_class.to_string(),
-                ),
-                (
-                    node_uri.clone(),
-                    properties::HAS_CONTENT.to_string(),
-                    format!("\"{}\"", node.content.replace("\"", "\\\"")),
-                ),
-            ];
-
-            if let Some(role) = node.agent_role {
-                triples.push((
-                    node_uri.clone(),
-                    properties::HAS_ROLE.to_string(),
-                    format!("\"{:?}\"", role),
-                ));
-            }
-
+            let triples = self.graph_adapter.node_upsert_triples(node)?;
             self.ingest_triples(triples).await?;
             Ok(())
         }
@@ -417,12 +283,9 @@ impl GraphMemory for SynapseMemory {
     async fn upsert_typed_edge(&self, edge: GraphEdgeUpsert) -> anyhow::Result<()> {
         #[cfg(feature = "memory-synapse")]
         {
-            let s_uri = format!("{}{}", namespaces::ZEROCLAW, edge.source.as_str());
-            let o_uri = format!("{}{}", namespaces::ZEROCLAW, edge.target.as_str());
+            let triple = self.graph_adapter.edge_upsert_triple(edge)?;
 
-            let predicate = Self::relation_to_predicate(&edge.relation);
-
-            self.ingest_triples(vec![(s_uri, predicate, o_uri)]).await?;
+            self.ingest_triples(vec![triple]).await?;
             Ok(())
         }
         #[cfg(not(feature = "memory-synapse"))]
@@ -435,16 +298,9 @@ impl GraphMemory for SynapseMemory {
     ) -> anyhow::Result<Vec<GraphEdge>> {
         #[cfg(feature = "memory-synapse")]
         {
-            let sparql = build_neighborhood_query(&query);
+            let sparql = self.graph_adapter.neighborhood_query(&query);
             let raw = self.store.query_sparql(&sparql)?;
-            let rows: Vec<Value> = serde_json::from_str(&raw)?;
-
-            let mut edges = Vec::with_capacity(rows.len());
-            for row in rows {
-                edges.push(Self::parse_graph_edge_binding(&row)?);
-            }
-
-            Ok(edges)
+            self.graph_adapter.hydrate_edges(&raw)
         }
         #[cfg(not(feature = "memory-synapse"))]
         Ok(Vec::new())
@@ -466,19 +322,7 @@ impl GraphMemory for SynapseMemory {
                 // Construct GraphSearchResult from URI
                 // We need to fetch node details (content, type) via SPARQL or helper
                 // simplified:
-                let id_str = uri.replace(namespaces::ZEROCLAW, "");
-                let id = NodeId::new(id_str).unwrap_or(NodeId::new("unknown").unwrap());
-
-                search_results.push(GraphSearchResult {
-                    node: GraphNode {
-                        id,
-                        node_type: SynapseNodeType::MemoryCore, // fetch actual type
-                        content: "loaded from synapse".into(),  // fetch actual content
-                        agent_role: None,
-                        decision_rule_id: None,
-                    },
-                    score,
-                });
+                search_results.push(self.graph_adapter.hydrate_search_result(&uri, score)?);
             }
             Ok(search_results)
         }
@@ -490,7 +334,8 @@ impl GraphMemory for SynapseMemory {
 #[cfg(all(test, feature = "memory-synapse"))]
 mod tests {
     use super::*;
-    use crate::memory::graph_traits::EdgeDirection;
+    use crate::memory::graph_traits::{EdgeDirection, NodeId, RelationType};
+    use crate::memory::synapse::ontology::properties;
     use tempfile::TempDir;
 
     async fn setup_memory() -> anyhow::Result<(TempDir, SynapseMemory)> {
@@ -625,6 +470,30 @@ mod tests {
         assert_eq!(edges[0].source, NodeId::new("node-a")?);
         assert_eq!(edges[0].target, NodeId::new("node-c")?);
         assert_eq!(edges[0].relation, RelationType::MessageLink);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn store_and_recall_orchestrate_sqlite_and_graph() -> anyhow::Result<()> {
+        let (_tmp, memory) = setup_memory().await?;
+
+        memory
+            .store(
+                "memory-1",
+                "deterministic synapse orchestration",
+                MemoryCategory::Conversation,
+                Some("session-a"),
+            )
+            .await?;
+
+        let recalled = memory
+            .recall("deterministic synapse orchestration", 3, Some("session-a"))
+            .await?;
+
+        assert!(!recalled.is_empty());
+        assert!(recalled
+            .iter()
+            .any(|entry| entry.key == "memory-1" && entry.content.contains("deterministic")));
         Ok(())
     }
 }

@@ -18,7 +18,7 @@ impl SynapseDomainAdapter {
     }
 
     pub fn category_to_relation_type(_category: &MemoryCategory) -> RelationType {
-        RelationType::CategoryMembership
+        RelationType::MessageLink
     }
 }
 
@@ -51,9 +51,9 @@ mod tests {
     }
 
     #[test]
-    fn adapter_uses_category_membership_relation() {
+    fn adapter_uses_message_link_relation() {
         let relation =
             SynapseDomainAdapter::category_to_relation_type(&MemoryCategory::Custom("x".into()));
-        assert_eq!(relation, RelationType::CategoryMembership);
+        assert_eq!(relation, RelationType::MessageLink);
     }
 }
