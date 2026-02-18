@@ -193,6 +193,139 @@ impl SynapseMemory {
             relation: Self::predicate_to_relation(predicate_uri.trim_matches(['<', '>']))?,
         })
     }
+
+    #[cfg(feature = "memory-synapse")]
+    fn parse_node_type(class_uri: &str) -> anyhow::Result<SynapseNodeType> {
+        match class_uri.trim_matches(['<', '>']) {
+            classes::AGENT => Ok(SynapseNodeType::Agent),
+            classes::DECISION_RULE => Ok(SynapseNodeType::DecisionRule),
+            classes::CONVERSATION => Ok(SynapseNodeType::MemoryConversation),
+            classes::MEMORY => Ok(SynapseNodeType::MemoryCore),
+            _ => anyhow::bail!("unsupported synapse node class: {class_uri}"),
+        }
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    fn parse_agent_role(raw_role: &str) -> anyhow::Result<super::graph_traits::AgentRole> {
+        match raw_role.trim_matches('"').to_ascii_lowercase().as_str() {
+            "user" => Ok(super::graph_traits::AgentRole::User),
+            "assistant" => Ok(super::graph_traits::AgentRole::Assistant),
+            "system" => Ok(super::graph_traits::AgentRole::System),
+            "tool" => Ok(super::graph_traits::AgentRole::Tool),
+            _ => anyhow::bail!("unsupported agent role: {raw_role}"),
+        }
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    fn decision_rule_id_predicate() -> String {
+        format!("{}decisionRuleId", namespaces::ZEROCLAW)
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    async fn retrieve_semantic_candidates(
+        &self,
+        query: &SemanticGraphQuery,
+    ) -> anyhow::Result<Vec<(String, f32)>> {
+        self.store.hybrid_search(&query.text, query.limit, 1).await
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    fn optional_row_value<'a>(row: &'a Value, key: &str) -> Option<&'a str> {
+        row.get(key).and_then(Value::as_str)
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    fn parse_optional_decision_rule_id(
+        value: Option<&str>,
+    ) -> anyhow::Result<Option<super::graph_traits::DecisionRuleId>> {
+        match value {
+            Some(raw) => Ok(Some(super::graph_traits::DecisionRuleId::new(
+                raw.trim_matches('"'),
+            )?)),
+            None => Ok(None),
+        }
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    fn matches_symbolic_filter(
+        node: &GraphNode,
+        filter: &super::graph_traits::SemanticSymbolicFilter,
+    ) -> bool {
+        let node_type_match = filter
+            .node_type
+            .as_ref()
+            .map_or(true, |expected| expected == &node.node_type);
+        let role_match = filter
+            .agent_role
+            .as_ref()
+            .map_or(true, |expected| Some(*expected) == node.agent_role);
+        let rule_match = filter.decision_rule_id.as_ref().map_or(true, |expected| {
+            node.decision_rule_id.as_ref() == Some(expected)
+        });
+
+        node_type_match && role_match && rule_match
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    fn relation_filter_query(uri: &str, relation: &RelationType) -> String {
+        let predicate = Self::relation_to_predicate(relation);
+        format!(
+            "ASK {{ {{ <{uri}> <{predicate}> ?o . FILTER(isIRI(?o)) }} UNION {{ ?s <{predicate}> <{uri}> . FILTER(isIRI(?s)) }} }}"
+        )
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    fn relation_match_for_uri(&self, uri: &str, relation: &RelationType) -> anyhow::Result<bool> {
+        let ask = Self::relation_filter_query(uri, relation);
+        let result = self.query_sparql(&ask)?;
+        Ok(result.contains("true"))
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    fn hydrate_node_from_uri(&self, uri: &str) -> anyhow::Result<GraphNode> {
+        let node_id = Self::node_id_from_uri(uri)?;
+        let decision_rule_predicate = Self::decision_rule_id_predicate();
+        let sparql = format!(
+            "SELECT ?class ?content ?role ?decision_rule WHERE {{
+  BIND(<{uri}> AS ?node)
+  ?node <{rdf_type}> ?class .
+  ?node <{has_content}> ?content .
+  OPTIONAL {{ ?node <{has_role}> ?role . }}
+  OPTIONAL {{ ?node <{decision_rule_predicate}> ?decision_rule . }}
+}} LIMIT 1",
+            rdf_type = namespaces::RDF.to_owned() + "type",
+            has_content = properties::HAS_CONTENT,
+            has_role = properties::HAS_ROLE,
+        );
+
+        let raw = self.query_sparql(&sparql)?;
+        let rows: Vec<Value> = serde_json::from_str(&raw)?;
+        let row = rows
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("missing graph node hydration data for uri: {uri}"))?;
+
+        let class_uri = Self::optional_row_value(row, "class")
+            .ok_or_else(|| anyhow::anyhow!("missing class binding for uri: {uri}"))?;
+        let content = Self::optional_row_value(row, "content")
+            .ok_or_else(|| anyhow::anyhow!("missing content binding for uri: {uri}"))?
+            .trim_matches('"')
+            .to_string();
+
+        let agent_role = Self::optional_row_value(row, "role")
+            .map(Self::parse_agent_role)
+            .transpose()?;
+
+        let decision_rule_id =
+            Self::parse_optional_decision_rule_id(Self::optional_row_value(row, "decision_rule"))?;
+
+        Ok(GraphNode {
+            id: node_id,
+            node_type: Self::parse_node_type(class_uri)?,
+            content,
+            agent_role,
+            decision_rule_id,
+        })
+    }
 }
 
 #[cfg(feature = "memory-synapse")]
@@ -456,29 +589,27 @@ impl GraphMemory for SynapseMemory {
     ) -> anyhow::Result<Vec<GraphSearchResult>> {
         #[cfg(feature = "memory-synapse")]
         {
-            let results = self
-                .store
-                .hybrid_search(&query.text, query.limit, 1)
-                .await?;
-            let mut search_results = Vec::new();
+            let candidates = self.retrieve_semantic_candidates(&query).await?;
+            let mut search_results = Vec::with_capacity(candidates.len());
 
-            for (uri, score) in results {
-                // Construct GraphSearchResult from URI
-                // We need to fetch node details (content, type) via SPARQL or helper
-                // simplified:
-                let id_str = uri.replace(namespaces::ZEROCLAW, "");
-                let id = NodeId::new(id_str).unwrap_or(NodeId::new("unknown").unwrap());
+            for (uri, score) in candidates {
+                if let Some(filter) = query.filter.as_ref() {
+                    if let Some(relation) = filter.relation.as_ref() {
+                        if !self.relation_match_for_uri(&uri, relation)? {
+                            continue;
+                        }
+                    }
+                }
 
-                search_results.push(GraphSearchResult {
-                    node: GraphNode {
-                        id,
-                        node_type: SynapseNodeType::MemoryCore, // fetch actual type
-                        content: "loaded from synapse".into(),  // fetch actual content
-                        agent_role: None,
-                        decision_rule_id: None,
-                    },
-                    score,
-                });
+                let node = self.hydrate_node_from_uri(&uri)?;
+
+                if let Some(filter) = query.filter.as_ref() {
+                    if !Self::matches_symbolic_filter(&node, filter) {
+                        continue;
+                    }
+                }
+
+                search_results.push(GraphSearchResult { node, score });
             }
             Ok(search_results)
         }
@@ -490,7 +621,7 @@ impl GraphMemory for SynapseMemory {
 #[cfg(all(test, feature = "memory-synapse"))]
 mod tests {
     use super::*;
-    use crate::memory::graph_traits::EdgeDirection;
+    use crate::memory::graph_traits::{DecisionRuleId, EdgeDirection, SemanticSymbolicFilter};
     use tempfile::TempDir;
 
     async fn setup_memory() -> anyhow::Result<(TempDir, SynapseMemory)> {
@@ -625,6 +756,138 @@ mod tests {
         assert_eq!(edges[0].source, NodeId::new("node-a")?);
         assert_eq!(edges[0].target, NodeId::new("node-c")?);
         assert_eq!(edges[0].relation, RelationType::MessageLink);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn semantic_search_with_filters_node_type_applies_filter() -> anyhow::Result<()> {
+        let (_tmp, memory) = setup_memory().await?;
+
+        memory
+            .upsert_node(GraphNodeUpsert {
+                id: NodeId::new("conversation-node")?,
+                node_type: SynapseNodeType::MemoryConversation,
+                content: "conversation semantic marker".to_string(),
+                agent_role: None,
+                decision_rule_id: None,
+            })
+            .await?;
+
+        let results = memory
+            .semantic_search_with_filters(SemanticGraphQuery {
+                text: "conversation semantic marker".to_string(),
+                limit: 5,
+                filter: Some(SemanticSymbolicFilter {
+                    relation: None,
+                    node_type: Some(SynapseNodeType::MemoryConversation),
+                    agent_role: None,
+                    decision_rule_id: None,
+                }),
+            })
+            .await?;
+
+        assert!(!results.is_empty());
+        assert_eq!(
+            results[0].node.node_type,
+            SynapseNodeType::MemoryConversation
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn semantic_search_with_filters_agent_role_applies_filter() -> anyhow::Result<()> {
+        let (_tmp, memory) = setup_memory().await?;
+
+        memory
+            .upsert_node(GraphNodeUpsert {
+                id: NodeId::new("assistant-agent")?,
+                node_type: SynapseNodeType::Agent,
+                content: "assistant agent semantic marker".to_string(),
+                agent_role: Some(AgentRole::Assistant),
+                decision_rule_id: None,
+            })
+            .await?;
+
+        let results = memory
+            .semantic_search_with_filters(SemanticGraphQuery {
+                text: "assistant agent semantic marker".to_string(),
+                limit: 5,
+                filter: Some(SemanticSymbolicFilter {
+                    relation: None,
+                    node_type: None,
+                    agent_role: Some(AgentRole::Assistant),
+                    decision_rule_id: None,
+                }),
+            })
+            .await?;
+
+        assert!(!results.is_empty());
+        assert_eq!(results[0].node.agent_role, Some(AgentRole::Assistant));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn semantic_search_with_filters_without_filter_returns_hydrated_node(
+    ) -> anyhow::Result<()> {
+        let (_tmp, memory) = setup_memory().await?;
+
+        memory
+            .upsert_node(GraphNodeUpsert {
+                id: NodeId::new("decision-node")?,
+                node_type: SynapseNodeType::DecisionRule,
+                content: "decision rule semantic marker".to_string(),
+                agent_role: None,
+                decision_rule_id: Some(DecisionRuleId::new("rule-1")?),
+            })
+            .await?;
+
+        let results = memory
+            .semantic_search_with_filters(SemanticGraphQuery {
+                text: "decision rule semantic marker".to_string(),
+                limit: 5,
+                filter: None,
+            })
+            .await?;
+
+        assert!(!results.is_empty());
+        assert_eq!(results[0].node.id, NodeId::new("decision-node")?);
+        assert_eq!(results[0].node.content, "decision rule semantic marker");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn semantic_search_with_filters_malformed_uri_or_type_returns_error() -> anyhow::Result<()>
+    {
+        let (_tmp, memory) = setup_memory().await?;
+
+        memory
+            .ingest_triples(vec![
+                (
+                    "http://example.com/not-zeroclaw".to_string(),
+                    (namespaces::RDF.to_owned() + "type"),
+                    classes::TASK.to_string(),
+                ),
+                (
+                    "http://example.com/not-zeroclaw".to_string(),
+                    properties::HAS_CONTENT.to_string(),
+                    "\"external node\"".to_string(),
+                ),
+            ])
+            .await?;
+
+        let err = memory
+            .semantic_search_with_filters(SemanticGraphQuery {
+                text: "external node".to_string(),
+                limit: 5,
+                filter: None,
+            })
+            .await
+            .expect_err("malformed uri or unsupported type should fail");
+
+        assert!(
+            err.to_string().contains("zeroclaw namespace")
+                || err.to_string().contains("unsupported synapse node class")
+        );
         Ok(())
     }
 }

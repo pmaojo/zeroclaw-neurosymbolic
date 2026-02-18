@@ -5,7 +5,8 @@ mod synapse_tests {
     use tempfile::TempDir;
     use zeroclaw::agent::synapse::{Orchestrator, SwarmManager};
     use zeroclaw::memory::graph_traits::{
-        EdgeDirection, GraphMemory, NeighborhoodQuery, NodeId, RelationType,
+        AgentRole, EdgeDirection, GraphMemory, GraphNodeUpsert, NeighborhoodQuery, NodeId,
+        RelationType, SemanticGraphQuery, SemanticSymbolicFilter, SynapseNodeType,
     };
     use zeroclaw::memory::synapse::ontology::{classes, namespaces, properties};
     use zeroclaw::memory::{Memory, SqliteMemory, SynapseMemory};
@@ -127,6 +128,48 @@ mod synapse_tests {
         assert!(
             !edges.is_empty(),
             "expected at least one edge for known triple"
+        );
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_synapse_semantic_search_returns_score_and_typed_payload() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let workspace = tmp.path();
+
+        let sqlite = SqliteMemory::new(workspace)?;
+        let memory = Arc::new(SynapseMemory::new(workspace, sqlite)?);
+
+        memory
+            .upsert_node(GraphNodeUpsert {
+                id: NodeId::new("agent-search")?,
+                node_type: SynapseNodeType::Agent,
+                content: "typed search payload for assistant".to_string(),
+                agent_role: Some(AgentRole::Assistant),
+                decision_rule_id: None,
+            })
+            .await?;
+
+        let results = memory
+            .semantic_search_with_filters(SemanticGraphQuery {
+                text: "typed search payload for assistant".to_string(),
+                limit: 3,
+                filter: Some(SemanticSymbolicFilter {
+                    relation: None,
+                    node_type: Some(SynapseNodeType::Agent),
+                    agent_role: Some(AgentRole::Assistant),
+                    decision_rule_id: None,
+                }),
+            })
+            .await?;
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].score.is_finite());
+        assert_eq!(results[0].node.id, NodeId::new("agent-search")?);
+        assert_eq!(results[0].node.node_type, SynapseNodeType::Agent);
+        assert_eq!(results[0].node.agent_role, Some(AgentRole::Assistant));
+        assert_eq!(
+            results[0].node.content,
+            "typed search payload for assistant"
         );
         Ok(())
     }
