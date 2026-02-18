@@ -1,0 +1,4 @@
+@prefix ex: <http://example.com/> .
+
+ex:subject ex:predicate ex:object .
+ex:agent ex:type ex:node .

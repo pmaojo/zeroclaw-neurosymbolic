@@ -10,6 +10,8 @@ use super::traits::{Memory, MemoryCategory, MemoryEntry};
 use async_trait::async_trait;
 #[cfg(feature = "memory-synapse")]
 use serde_json::Value;
+#[cfg(feature = "memory-synapse")]
+use std::io::Cursor;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -17,9 +19,49 @@ use std::sync::Arc;
 #[cfg(feature = "memory-synapse")]
 use crate::memory::synapse::ontology::{classes, namespaces, properties};
 #[cfg(feature = "memory-synapse")]
+use oxigraph::io::{GraphFormat, GraphParser};
+#[cfg(feature = "memory-synapse")]
 use synapse_core::scenarios::ScenarioManager;
 #[cfg(feature = "memory-synapse")]
 use synapse_core::store::{IngestTriple, Provenance, SynapseStore};
+
+#[cfg(feature = "memory-synapse")]
+const MAX_ONTOLOGY_SIZE_BYTES: usize = 10 * 1024 * 1024;
+#[cfg(feature = "memory-synapse")]
+const MAX_ONTOLOGY_TRIPLES: usize = 100_000;
+
+#[cfg(feature = "memory-synapse")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OntologyFormat {
+    Turtle,
+    RdfXml,
+}
+
+#[cfg(feature = "memory-synapse")]
+impl OntologyFormat {
+    fn graph_format(self) -> GraphFormat {
+        match self {
+            Self::Turtle => GraphFormat::Turtle,
+            Self::RdfXml => GraphFormat::RdfXml,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Turtle => "turtle",
+            Self::RdfXml => "rdfxml",
+        }
+    }
+}
+
+#[cfg(feature = "memory-synapse")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OntologyImportSummary {
+    pub source: String,
+    pub format: OntologyFormat,
+    pub parsed_triples: usize,
+    pub imported_triples: u32,
+}
 
 pub struct SynapseMemory {
     #[cfg(feature = "memory-synapse")]
@@ -93,21 +135,183 @@ impl SynapseMemory {
         Ok(())
     }
 
-    /// Import ontology from a URL (e.g. Turtle/RDF)
+    /// Import ontology from an HTTP(S) URL or local file path.
     #[cfg(feature = "memory-synapse")]
-    pub async fn import_ontology(&self, url: &str) -> anyhow::Result<()> {
-        // synapse-core's ScenarioManager or Store might expose this,
-        // or we can just fetch and parse ourselves if needed.
-        // For now, let's assume we can fetch and ingest as raw triples if format is simple,
-        // but robust implementation would use oxigraph's parser.
-        // Since synapse-core manages ingestion, let's verify if it exposes a direct import.
-        // Looking at synapse-core source, it has `ingest::ingest_file`.
-        // We will implement a basic fetch-and-ingest here using reqwest + oxigraph if needed,
-        // or just placeholder for the concept if synapse-core has a dedicated method we missed.
+    pub async fn import_ontology(&self, source: &str) -> anyhow::Result<OntologyImportSummary> {
+        let (bytes, format, source_label) = self.load_ontology_source(source).await?;
+        let triples = Self::parse_ontology_triples(&bytes, format, &source_label)?;
+        let parsed_triples = triples.len();
 
-        // Let's rely on SynapseStore's capabilities.
-        // If not directly available, we can add it later.
-        Ok(())
+        let (imported_triples, _) = self.store.ingest_triples(triples).await?;
+        if imported_triples as usize != parsed_triples {
+            anyhow::bail!(
+                "ontology ingest incomplete: parsed {} triples but inserted {}",
+                parsed_triples,
+                imported_triples
+            );
+        }
+
+        tracing::info!(
+            source = %source_label,
+            format = format.as_str(),
+            parsed_triples,
+            imported_triples,
+            "ontology import completed"
+        );
+
+        Ok(OntologyImportSummary {
+            source: source_label,
+            format,
+            parsed_triples,
+            imported_triples,
+        })
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    async fn load_ontology_source(
+        &self,
+        source: &str,
+    ) -> anyhow::Result<(Vec<u8>, OntologyFormat, String)> {
+        if source.starts_with("http://") || source.starts_with("https://") {
+            let response = reqwest::get(source)
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to fetch ontology from '{source}': {e}"))?
+                .error_for_status()
+                .map_err(|e| anyhow::anyhow!("failed to fetch ontology from '{source}': {e}"))?;
+
+            if let Some(content_len) = response.content_length() {
+                if content_len as usize > MAX_ONTOLOGY_SIZE_BYTES {
+                    anyhow::bail!(
+                        "ontology payload exceeds size limit ({} bytes > {} bytes)",
+                        content_len,
+                        MAX_ONTOLOGY_SIZE_BYTES
+                    );
+                }
+            }
+
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned);
+
+            let bytes = response.bytes().await.map_err(|e| {
+                anyhow::anyhow!("failed to read ontology payload from '{source}': {e}")
+            })?;
+
+            if bytes.len() > MAX_ONTOLOGY_SIZE_BYTES {
+                anyhow::bail!(
+                    "ontology payload exceeds size limit ({} bytes > {} bytes)",
+                    bytes.len(),
+                    MAX_ONTOLOGY_SIZE_BYTES
+                );
+            }
+
+            let format = Self::detect_ontology_format(source, content_type.as_deref())?;
+            return Ok((bytes.to_vec(), format, source.to_string()));
+        }
+
+        let path = Path::new(source);
+        if !path.exists() {
+            anyhow::bail!("ontology source does not exist: {source}");
+        }
+        if !path.is_file() {
+            anyhow::bail!("ontology source is not a file: {source}");
+        }
+
+        let metadata = std::fs::metadata(path)?;
+        if metadata.len() as usize > MAX_ONTOLOGY_SIZE_BYTES {
+            anyhow::bail!(
+                "ontology file exceeds size limit ({} bytes > {} bytes)",
+                metadata.len(),
+                MAX_ONTOLOGY_SIZE_BYTES
+            );
+        }
+
+        let format = Self::detect_ontology_format(source, None)?;
+        let bytes = std::fs::read(path)?;
+        Ok((bytes, format, source.to_string()))
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    fn parse_ontology_triples(
+        bytes: &[u8],
+        format: OntologyFormat,
+        source: &str,
+    ) -> anyhow::Result<Vec<IngestTriple>> {
+        let parser = GraphParser::from_format(format.graph_format());
+        let reader = Cursor::new(bytes);
+        let mut ingest_triples = Vec::new();
+
+        for triple_result in parser.read_triples(reader)? {
+            let triple = triple_result
+                .map_err(|e| anyhow::anyhow!("failed to parse ontology '{source}': {e}"))?;
+
+            ingest_triples.push(IngestTriple {
+                subject: triple.subject.to_string(),
+                predicate: triple.predicate.to_string(),
+                object: triple.object.to_string(),
+                provenance: Some(Provenance {
+                    source: source.to_string(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    method: format!("ontology_import:{}", format.as_str()),
+                }),
+            });
+
+            if ingest_triples.len() > MAX_ONTOLOGY_TRIPLES {
+                anyhow::bail!(
+                    "ontology triple count exceeds limit ({} > {})",
+                    ingest_triples.len(),
+                    MAX_ONTOLOGY_TRIPLES
+                );
+            }
+        }
+
+        if ingest_triples.is_empty() {
+            anyhow::bail!("ontology contains no triples: {source}");
+        }
+
+        Ok(ingest_triples)
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    fn detect_ontology_format(
+        source: &str,
+        content_type: Option<&str>,
+    ) -> anyhow::Result<OntologyFormat> {
+        if let Some(content_type) = content_type {
+            let normalized = content_type
+                .split(';')
+                .next()
+                .unwrap_or(content_type)
+                .trim()
+                .to_ascii_lowercase();
+
+            if normalized == "text/turtle" || normalized == "application/x-turtle" {
+                return Ok(OntologyFormat::Turtle);
+            }
+            if normalized == "application/rdf+xml" || normalized == "text/xml" {
+                return Ok(OntologyFormat::RdfXml);
+            }
+        }
+
+        let extension = Path::new(source)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unsupported ontology format for '{source}': expected turtle (.ttl) or RDF/XML (.rdf, .owl, .xml)"
+                )
+            })?;
+
+        match extension.as_str() {
+            "ttl" => Ok(OntologyFormat::Turtle),
+            "rdf" | "owl" | "xml" => Ok(OntologyFormat::RdfXml),
+            _ => anyhow::bail!(
+                "unsupported ontology format for '{source}': expected turtle (.ttl) or RDF/XML (.rdf, .owl, .xml)"
+            ),
+        }
     }
 
     // Scenario Management
@@ -541,6 +745,71 @@ mod tests {
         let sqlite = SqliteMemory::new(temp_dir.path())?;
         let memory = SynapseMemory::new(temp_dir.path(), sqlite)?;
         Ok((temp_dir, memory))
+    }
+
+    #[tokio::test]
+    async fn import_ontology_successful_turtle_import() -> anyhow::Result<()> {
+        let (_tmp, memory) = setup_memory().await?;
+        let source = format!(
+            "{}/tests/assets/ontologies/valid.ttl",
+            env!("CARGO_MANIFEST_DIR")
+        );
+
+        let summary = memory.import_ontology(&source).await?;
+
+        assert_eq!(summary.source, source);
+        assert_eq!(summary.format, OntologyFormat::Turtle);
+        assert_eq!(summary.parsed_triples, 2);
+        assert_eq!(summary.imported_triples, 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn import_ontology_rejects_unsupported_format() -> anyhow::Result<()> {
+        let (_tmp, memory) = setup_memory().await?;
+        let source = format!(
+            "{}/tests/assets/ontologies/unsupported.txt",
+            env!("CARGO_MANIFEST_DIR")
+        );
+
+        let result = memory.import_ontology(&source).await;
+
+        assert!(result.is_err());
+        let error = result.err().expect("error expected").to_string();
+        assert!(error.contains("unsupported ontology format"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn import_ontology_fails_on_parse_error() -> anyhow::Result<()> {
+        let (_tmp, memory) = setup_memory().await?;
+        let source = format!(
+            "{}/tests/assets/ontologies/invalid.ttl",
+            env!("CARGO_MANIFEST_DIR")
+        );
+
+        let result = memory.import_ontology(&source).await;
+
+        assert!(result.is_err());
+        let error = result.err().expect("error expected").to_string();
+        assert!(error.contains("failed to parse ontology"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn import_ontology_fails_when_ingest_is_partial() -> anyhow::Result<()> {
+        let (_tmp, memory) = setup_memory().await?;
+        let source = format!(
+            "{}/tests/assets/ontologies/duplicate.ttl",
+            env!("CARGO_MANIFEST_DIR")
+        );
+
+        let result = memory.import_ontology(&source).await;
+
+        assert!(result.is_err());
+        let error = result.err().expect("error expected").to_string();
+        assert!(error.contains("ontology ingest incomplete"));
+        Ok(())
     }
 
     #[tokio::test]
