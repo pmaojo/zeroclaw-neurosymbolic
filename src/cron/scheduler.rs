@@ -101,18 +101,16 @@ async fn run_agent_job(config: &Config, job: &CronJob) -> (bool, String) {
     }
 
     match crate::agent::agent::Agent::from_config(&effective_config) {
-        Ok(mut agent) => {
-            match agent.run_single(&prefixed_prompt).await {
-                Ok(response) => (
-                    true,
-                    if response.trim().is_empty() {
-                        "agent job executed".to_string()
-                    } else {
-                        response
-                    },
-                ),
-                Err(e) => (false, format!("agent job failed: {e}")),
-            }
+        Ok(mut agent) => match agent.run_single(&prefixed_prompt).await {
+            Ok(response) => (
+                true,
+                if response.trim().is_empty() {
+                    "agent job executed".to_string()
+                } else {
+                    response
+                },
+            ),
+            Err(e) => (false, format!("agent job failed: {e}")),
         },
         Err(e) => (false, format!("failed to initialize agent: {e}")),
     }

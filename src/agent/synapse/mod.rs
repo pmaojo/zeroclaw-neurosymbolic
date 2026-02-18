@@ -1,4 +1,4 @@
-pub mod swarm;
 pub mod orchestrator;
-pub use swarm::SwarmManager;
+pub mod swarm;
 pub use orchestrator::Orchestrator;
+pub use swarm::SwarmManager;
