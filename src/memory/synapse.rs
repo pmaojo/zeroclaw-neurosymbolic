@@ -162,14 +162,22 @@ impl SynapseMemory {
     }
 
     #[cfg(feature = "memory-synapse")]
-    fn node_id_from_uri(uri: &str) -> anyhow::Result<NodeId> {
+    fn uri_to_node_id(uri: &str) -> anyhow::Result<NodeId> {
         let normalized = uri.trim().trim_start_matches('<').trim_end_matches('>');
         let raw_id = normalized
             .strip_prefix(namespaces::ZEROCLAW)
             .ok_or_else(|| {
                 anyhow::anyhow!("expected node URI in zeroclaw namespace, got: {uri}")
             })?;
+        if raw_id.trim().is_empty() {
+            anyhow::bail!("node URI suffix cannot be empty: {uri}");
+        }
         NodeId::new(raw_id)
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    fn node_id_to_uri(id: &NodeId) -> String {
+        format!("{}{}", namespaces::ZEROCLAW, id.as_str())
     }
 
     #[cfg(feature = "memory-synapse")]
@@ -188,8 +196,8 @@ impl SynapseMemory {
             .ok_or_else(|| anyhow::anyhow!("missing 'target' binding in SPARQL row: {row}"))?;
 
         Ok(GraphEdge {
-            source: Self::node_id_from_uri(source_uri)?,
-            target: Self::node_id_from_uri(target_uri)?,
+            source: Self::uri_to_node_id(source_uri)?,
+            target: Self::uri_to_node_id(target_uri)?,
             relation: Self::predicate_to_relation(predicate_uri.trim_matches(['<', '>']))?,
         })
     }
@@ -197,7 +205,7 @@ impl SynapseMemory {
 
 #[cfg(feature = "memory-synapse")]
 fn build_neighborhood_query(query: &NeighborhoodQuery) -> String {
-    let anchor_uri = format!("<{}{}>", namespaces::ZEROCLAW, query.anchor.as_str());
+    let anchor_uri = format!("<{}>", SynapseMemory::node_id_to_uri(&query.anchor));
     let relation_filter = query
         .relation
         .as_ref()
@@ -376,7 +384,7 @@ impl GraphMemory for SynapseMemory {
     async fn upsert_node(&self, node: GraphNodeUpsert) -> anyhow::Result<()> {
         #[cfg(feature = "memory-synapse")]
         {
-            let node_uri = format!("{}{}", namespaces::ZEROCLAW, node.id.as_str());
+            let node_uri = Self::node_id_to_uri(&node.id);
 
             // Map SynapseNodeType to RDF Class
             let rdf_class = match node.node_type {
@@ -417,8 +425,8 @@ impl GraphMemory for SynapseMemory {
     async fn upsert_typed_edge(&self, edge: GraphEdgeUpsert) -> anyhow::Result<()> {
         #[cfg(feature = "memory-synapse")]
         {
-            let s_uri = format!("{}{}", namespaces::ZEROCLAW, edge.source.as_str());
-            let o_uri = format!("{}{}", namespaces::ZEROCLAW, edge.target.as_str());
+            let s_uri = Self::node_id_to_uri(&edge.source);
+            let o_uri = Self::node_id_to_uri(&edge.target);
 
             let predicate = Self::relation_to_predicate(&edge.relation);
 
@@ -466,8 +474,7 @@ impl GraphMemory for SynapseMemory {
                 // Construct GraphSearchResult from URI
                 // We need to fetch node details (content, type) via SPARQL or helper
                 // simplified:
-                let id_str = uri.replace(namespaces::ZEROCLAW, "");
-                let id = NodeId::new(id_str).unwrap_or(NodeId::new("unknown").unwrap());
+                let id = Self::uri_to_node_id(&uri)?;
 
                 search_results.push(GraphSearchResult {
                     node: GraphNode {
@@ -492,6 +499,42 @@ mod tests {
     use super::*;
     use crate::memory::graph_traits::EdgeDirection;
     use tempfile::TempDir;
+
+    #[test]
+    fn uri_to_node_id_roundtrip_valid_uri() -> anyhow::Result<()> {
+        let id = NodeId::new("memory/node-1")?;
+        let uri = SynapseMemory::node_id_to_uri(&id);
+        let parsed = SynapseMemory::uri_to_node_id(&uri)?;
+
+        assert_eq!(parsed, id);
+        Ok(())
+    }
+
+    #[test]
+    fn uri_to_node_id_rejects_empty_tail() {
+        let uri = namespaces::ZEROCLAW.to_string();
+        let result = SynapseMemory::uri_to_node_id(&uri);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn uri_to_node_id_rejects_wrong_namespace() {
+        let uri = "https://example.com/node-1";
+        let result = SynapseMemory::uri_to_node_id(uri);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn uri_to_node_id_roundtrip_with_special_characters() -> anyhow::Result<()> {
+        let id = NodeId::new("node with spaces/%25?and=queries#frag")?;
+        let uri = SynapseMemory::node_id_to_uri(&id);
+        let parsed = SynapseMemory::uri_to_node_id(&uri)?;
+
+        assert_eq!(parsed, id);
+        Ok(())
+    }
 
     async fn setup_memory() -> anyhow::Result<(TempDir, SynapseMemory)> {
         let temp_dir = TempDir::new()?;
@@ -625,6 +668,35 @@ mod tests {
         assert_eq!(edges[0].source, NodeId::new("node-a")?);
         assert_eq!(edges[0].target, NodeId::new("node-c")?);
         assert_eq!(edges[0].relation, RelationType::MessageLink);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn semantic_search_results_never_use_unknown_node_id() -> anyhow::Result<()> {
+        let (_tmp, memory) = setup_memory().await?;
+
+        memory
+            .upsert_node(GraphNodeUpsert {
+                id: NodeId::new("search-node")?,
+                node_type: SynapseNodeType::MemoryCore,
+                content: "searchable semantic memory".to_string(),
+                agent_role: None,
+                decision_rule_id: None,
+            })
+            .await?;
+
+        let results = memory
+            .semantic_search_with_filters(SemanticGraphQuery {
+                text: "searchable".to_string(),
+                limit: 10,
+                filter: None,
+            })
+            .await?;
+
+        assert!(!results.is_empty());
+        assert!(results
+            .iter()
+            .all(|result| result.node.id.as_str() != "unknown"));
         Ok(())
     }
 }
