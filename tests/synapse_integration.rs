@@ -4,8 +4,11 @@ mod synapse_tests {
     use std::sync::Arc;
     use tempfile::TempDir;
     use zeroclaw::agent::synapse::{Orchestrator, SwarmManager};
-    use zeroclaw::memory::synapse::ontology::{classes, properties, namespaces};
-    use zeroclaw::memory::{Memory, SynapseMemory, SqliteMemory};
+    use zeroclaw::memory::graph_traits::{
+        EdgeDirection, GraphMemory, NeighborhoodQuery, NodeId, RelationType,
+    };
+    use zeroclaw::memory::synapse::ontology::{classes, namespaces, properties};
+    use zeroclaw::memory::{Memory, SqliteMemory, SynapseMemory};
 
     #[tokio::test]
     async fn test_synapse_full_flow() -> Result<()> {
@@ -18,10 +21,16 @@ mod synapse_tests {
 
         // 2. Register Agent via SwarmManager
         let swarm = SwarmManager::new(memory.clone());
-        swarm.register_agent("agent_007", "Assistant", vec!["search_tool"]).await?;
+        swarm
+            .register_agent("agent_007", "Assistant", vec!["search_tool"])
+            .await?;
 
         // Verify Agent Node exists
-        let query = format!("ASK {{ <{}agent_007> a <{}> }}", namespaces::ZEROCLAW, classes::AGENT);
+        let query = format!(
+            "ASK {{ <{}agent_007> a <{}> }}",
+            namespaces::ZEROCLAW,
+            classes::AGENT
+        );
         let result = memory.query_sparql(&query)?;
         assert!(result.contains("true"), "Agent node should exist");
 
@@ -30,17 +39,17 @@ mod synapse_tests {
         println!("Created task: {}", task_id);
 
         // Verify Task Node exists
-        let query_task = format!("ASK {{ <{}Task/{}> a <{}> }}", namespaces::ZEROCLAW, task_id, classes::TASK);
+        let query_task = format!(
+            "ASK {{ <{}Task/{}> a <{}> }}",
+            namespaces::ZEROCLAW,
+            task_id,
+            classes::TASK
+        );
         let result_task = memory.query_sparql(&query_task)?;
         assert!(result_task.contains("true"), "Task node should exist");
 
         // 4. Run Orchestrator Cycle (Assign Task)
-        let orchestrator = Orchestrator::new(memory.clone());
-        // Since run() loops, we manually trigger the logic via memory queries or internal methods if exposed.
-        // But orchestrator::cycle is private.
-        // We can't call cycle() directly.
-        // However, we can verify that the data structures allow for assignment if we implement the logic manually here
-        // to prove the query patterns work.
+        let _orchestrator = Orchestrator::new(memory.clone());
 
         // Simulate Orchestrator Logic: Find unassigned task
         let find_query = format!(
@@ -57,30 +66,68 @@ mod synapse_tests {
         // Assign it
         let agent_uri = format!("{}agent_007", namespaces::ZEROCLAW);
         let task_uri = format!("{}Task/{}", namespaces::ZEROCLAW, task_id);
-        memory.ingest_triples(vec![
-            (task_uri.clone(), properties::ASSIGNED_TO.to_string(), agent_uri.clone())
-        ]).await?;
+        memory
+            .ingest_triples(vec![(
+                task_uri.clone(),
+                properties::ASSIGNED_TO.to_string(),
+                agent_uri.clone(),
+            )])
+            .await?;
 
         // 5. Verify Assignment
-        let check_assign = format!("ASK {{ <{}> <{}> <{}> }}", task_uri, properties::ASSIGNED_TO, agent_uri);
+        let check_assign = format!(
+            "ASK {{ <{}> <{}> <{}> }}",
+            task_uri,
+            properties::ASSIGNED_TO,
+            agent_uri
+        );
         let assigned = memory.query_sparql(&check_assign)?;
         assert!(assigned.contains("true"), "Task should be assigned");
 
-        // 6. Test Vector Search (Candle)
-        // Note: First run might be slow due to model download if not cached, but in CI/Sandbox we rely on pre-download or failure handling.
-        // My implementation stubs/errors if model load fails? No, it uses hf-hub.
-        // Let's try adding a memory with embedding.
-
+        // 6. Test Vector Search path
         let content = "The sky is blue and the sun is bright.";
-        memory.store("fact_1", content, zeroclaw::memory::MemoryCategory::Core, None).await?;
+        memory
+            .store(
+                "fact_1",
+                content,
+                zeroclaw::memory::MemoryCategory::Core,
+                None,
+            )
+            .await?;
 
-        // Query
-        let results = memory.recall("weather", 1, None).await?;
-        // If embedding worked, we might get it back.
-        // Note: Linear search + Candle might be slow or fail download.
-        // We accept empty results if model download fails in sandbox without internet/token,
-        // but the code path is exercised.
+        let _results = memory.recall("weather", 1, None).await?;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_synapse_neighborhood_query_returns_non_empty_edges() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let workspace = tmp.path();
+
+        let sqlite = SqliteMemory::new(workspace)?;
+        let memory = Arc::new(SynapseMemory::new(workspace, sqlite)?);
+
+        memory
+            .ingest_triples(vec![(
+                format!("{}node-source", namespaces::ZEROCLAW),
+                properties::RELATES_TO.to_string(),
+                format!("{}node-target", namespaces::ZEROCLAW),
+            )])
+            .await?;
+
+        let edges = memory
+            .query_by_neighborhood(NeighborhoodQuery {
+                anchor: NodeId::new("node-source")?,
+                direction: EdgeDirection::Outbound,
+                relation: Some(RelationType::DecisionConstraint),
+            })
+            .await?;
+
+        assert!(
+            !edges.is_empty(),
+            "expected at least one edge for known triple"
+        );
         Ok(())
     }
 }

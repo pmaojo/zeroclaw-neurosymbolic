@@ -1,26 +1,25 @@
 pub mod ontology;
 
 use super::graph_traits::{
-    GraphEdge, GraphEdgeUpsert, GraphMemory, GraphNode, GraphNodeUpsert,
-    GraphSearchResult, NeighborhoodQuery, NodeId, SemanticGraphQuery,
-    SynapseNodeType, RelationType
+    GraphEdge, GraphEdgeUpsert, GraphMemory, GraphNode, GraphNodeUpsert, GraphSearchResult,
+    NeighborhoodQuery, NodeId, RelationType, SemanticGraphQuery, SynapseNodeType,
 };
 #[cfg(feature = "memory-synapse")]
 use super::sqlite::SqliteMemory;
 use super::traits::{Memory, MemoryCategory, MemoryEntry};
 use async_trait::async_trait;
+#[cfg(feature = "memory-synapse")]
+use serde_json::Value;
 use std::path::Path;
 use std::sync::Arc;
-#[cfg(feature = "memory-synapse")]
-use tokio::sync::RwLock;
 
 // Conditional compilation imports
 #[cfg(feature = "memory-synapse")]
-use crate::memory::synapse::ontology::{classes, properties, namespaces};
-#[cfg(feature = "memory-synapse")]
-use synapse_core::store::{SynapseStore, IngestTriple, Provenance};
+use crate::memory::synapse::ontology::{classes, namespaces, properties};
 #[cfg(feature = "memory-synapse")]
 use synapse_core::scenarios::ScenarioManager;
+#[cfg(feature = "memory-synapse")]
+use synapse_core::store::{IngestTriple, Provenance, SynapseStore};
 
 pub struct SynapseMemory {
     #[cfg(feature = "memory-synapse")]
@@ -61,9 +60,10 @@ impl SynapseMemory {
     // Helper constructor to allow compilation even if feature is disabled
     #[cfg(not(feature = "memory-synapse"))]
     pub fn new_fallback() -> Self {
-         Self { local: std::marker::PhantomData }
+        Self {
+            local: std::marker::PhantomData,
+        }
     }
-
 
     #[cfg(feature = "memory-synapse")]
     pub fn store(&self) -> &SynapseStore {
@@ -71,7 +71,10 @@ impl SynapseMemory {
     }
 
     #[cfg(feature = "memory-synapse")]
-    pub async fn ingest_triples(&self, triples: Vec<(String, String, String)>) -> anyhow::Result<()> {
+    pub async fn ingest_triples(
+        &self,
+        triples: Vec<(String, String, String)>,
+    ) -> anyhow::Result<()> {
         let ingest_triples: Vec<IngestTriple> = triples
             .into_iter()
             .map(|(s, p, o)| IngestTriple {
@@ -109,7 +112,9 @@ impl SynapseMemory {
 
     // Scenario Management
     #[cfg(feature = "memory-synapse")]
-    pub async fn list_scenarios(&self) -> anyhow::Result<Vec<synapse_core::scenarios::RegistryEntry>> {
+    pub async fn list_scenarios(
+        &self,
+    ) -> anyhow::Result<Vec<synapse_core::scenarios::RegistryEntry>> {
         self.scenario_manager.list_scenarios().await
     }
 
@@ -122,6 +127,113 @@ impl SynapseMemory {
     #[cfg(feature = "memory-synapse")]
     pub fn query_sparql(&self, query: &str) -> anyhow::Result<String> {
         Ok(self.store.query_sparql(query)?)
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    fn relation_to_predicate(relation: &RelationType) -> String {
+        match relation {
+            RelationType::CategoryMembership => namespaces::RDF.to_owned() + "type",
+            RelationType::DecisionConstraint => properties::RELATES_TO.to_string(),
+            RelationType::MessageLink => properties::CONTEXT_FOR.to_string(),
+            RelationType::Custom(value) => format!("{}{}", namespaces::ZEROCLAW, value),
+        }
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    fn predicate_to_relation(predicate: &str) -> anyhow::Result<RelationType> {
+        if predicate == (namespaces::RDF.to_owned() + "type") {
+            return Ok(RelationType::CategoryMembership);
+        }
+        if predicate == properties::RELATES_TO {
+            return Ok(RelationType::DecisionConstraint);
+        }
+        if predicate == properties::CONTEXT_FOR {
+            return Ok(RelationType::MessageLink);
+        }
+
+        if let Some(custom) = predicate.strip_prefix(namespaces::ZEROCLAW) {
+            if custom.trim().is_empty() {
+                anyhow::bail!("custom relation predicate suffix cannot be empty");
+            }
+            return Ok(RelationType::Custom(custom.to_string()));
+        }
+
+        anyhow::bail!("unsupported predicate for relation mapping: {predicate}")
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    fn node_id_from_uri(uri: &str) -> anyhow::Result<NodeId> {
+        let normalized = uri.trim().trim_start_matches('<').trim_end_matches('>');
+        let raw_id = normalized
+            .strip_prefix(namespaces::ZEROCLAW)
+            .ok_or_else(|| {
+                anyhow::anyhow!("expected node URI in zeroclaw namespace, got: {uri}")
+            })?;
+        NodeId::new(raw_id)
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    fn parse_graph_edge_binding(row: &Value) -> anyhow::Result<GraphEdge> {
+        let source_uri = row
+            .get("source")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("missing 'source' binding in SPARQL row: {row}"))?;
+        let predicate_uri = row
+            .get("predicate")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("missing 'predicate' binding in SPARQL row: {row}"))?;
+        let target_uri = row
+            .get("target")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("missing 'target' binding in SPARQL row: {row}"))?;
+
+        Ok(GraphEdge {
+            source: Self::node_id_from_uri(source_uri)?,
+            target: Self::node_id_from_uri(target_uri)?,
+            relation: Self::predicate_to_relation(predicate_uri.trim_matches(['<', '>']))?,
+        })
+    }
+}
+
+#[cfg(feature = "memory-synapse")]
+fn build_neighborhood_query(query: &NeighborhoodQuery) -> String {
+    let anchor_uri = format!("<{}{}>", namespaces::ZEROCLAW, query.anchor.as_str());
+    let relation_filter = query
+        .relation
+        .as_ref()
+        .map(SynapseMemory::relation_to_predicate)
+        .map(|predicate| format!("VALUES ?predicate {{ <{}> }}", predicate))
+        .unwrap_or_default();
+
+    let where_clause = match query.direction {
+        super::graph_traits::EdgeDirection::Outbound => {
+            format!(
+                "BIND({anchor} AS ?source)\n?source ?predicate ?target .\nFILTER(isIRI(?target))",
+                anchor = anchor_uri
+            )
+        }
+        super::graph_traits::EdgeDirection::Inbound => {
+            format!(
+                "BIND({anchor} AS ?target)\n?source ?predicate ?target .\nFILTER(isIRI(?source))",
+                anchor = anchor_uri
+            )
+        }
+        super::graph_traits::EdgeDirection::Both => {
+            format!(
+                "{{\n  BIND({anchor} AS ?source)\n  ?source ?predicate ?target .\n  FILTER(isIRI(?target))\n}} UNION {{\n  BIND({anchor} AS ?target)\n  ?source ?predicate ?target .\n  FILTER(isIRI(?source))\n}}",
+                anchor = anchor_uri
+            )
+        }
+    };
+
+    if relation_filter.is_empty() {
+        format!(
+            "SELECT ?source ?predicate ?target WHERE {{\n{where_clause}\n}} ORDER BY ?source ?predicate ?target",
+        )
+    } else {
+        format!(
+            "SELECT ?source ?predicate ?target WHERE {{\n{where_clause}\n{relation_filter}\n}} ORDER BY ?source ?predicate ?target",
+        )
     }
 }
 
@@ -146,13 +258,25 @@ impl Memory for SynapseMemory {
 
             // Create a node for this memory entry
             let node_uri = format!("{}Memory/{}", namespaces::ZEROCLAW, key);
-            let type_triple = (node_uri.clone(), namespaces::RDF.to_owned() + "type", classes::MEMORY.to_string());
-            let content_triple = (node_uri.clone(), properties::HAS_CONTENT.to_string(), format!("\"{}\"", content.replace("\"", "\\\"")));
+            let type_triple = (
+                node_uri.clone(),
+                namespaces::RDF.to_owned() + "type",
+                classes::MEMORY.to_string(),
+            );
+            let content_triple = (
+                node_uri.clone(),
+                properties::HAS_CONTENT.to_string(),
+                format!("\"{}\"", content.replace("\"", "\\\"")),
+            );
 
             let mut triples = vec![type_triple, content_triple];
 
             if let Some(sess) = session_id {
-                triples.push((node_uri.clone(), properties::CONTEXT_FOR.to_string(), format!("{}Session/{}", namespaces::ZEROCLAW, sess)));
+                triples.push((
+                    node_uri.clone(),
+                    properties::CONTEXT_FOR.to_string(),
+                    format!("{}Session/{}", namespaces::ZEROCLAW, sess),
+                ));
             }
 
             self.ingest_triples(triples).await?;
@@ -160,7 +284,7 @@ impl Memory for SynapseMemory {
         }
         #[cfg(not(feature = "memory-synapse"))]
         {
-             anyhow::bail!("Synapse memory feature not enabled")
+            anyhow::bail!("Synapse memory feature not enabled")
         }
     }
 
@@ -180,18 +304,22 @@ impl Memory for SynapseMemory {
             if !results.is_empty() {
                 for (uri, score) in results {
                     // Try to fetch full content from SQLite if we have a key mapping
-                    if let Some(key) = uri.strip_prefix(&format!("{}Memory/", namespaces::ZEROCLAW)) {
-                         if let Ok(Some(mut entry)) = self.local.get(key).await {
-                             // entry.score = score; // If MemoryEntry had a score field
-                             entries.push(entry);
-                         }
+                    if let Some(key) = uri.strip_prefix(&format!("{}Memory/", namespaces::ZEROCLAW))
+                    {
+                        if let Ok(Some(mut entry)) = self.local.get(key).await {
+                            // entry.score = score; // If MemoryEntry had a score field
+                            entries.push(entry);
+                        }
                     }
                 }
             }
 
             // Fallback/Combine with standard recall if graph results are sparse
             if entries.len() < limit {
-                let mut fallback = self.local.recall(query, limit - entries.len(), session_id).await?;
+                let mut fallback = self
+                    .local
+                    .recall(query, limit - entries.len(), session_id)
+                    .await?;
                 entries.append(&mut fallback);
             }
 
@@ -199,7 +327,7 @@ impl Memory for SynapseMemory {
         }
         #[cfg(not(feature = "memory-synapse"))]
         {
-             anyhow::bail!("Synapse memory feature not enabled")
+            anyhow::bail!("Synapse memory feature not enabled")
         }
     }
 
@@ -252,19 +380,31 @@ impl GraphMemory for SynapseMemory {
 
             // Map SynapseNodeType to RDF Class
             let rdf_class = match node.node_type {
-                 SynapseNodeType::Agent => classes::AGENT,
-                 SynapseNodeType::DecisionRule => classes::DECISION_RULE,
-                 SynapseNodeType::MemoryConversation => classes::CONVERSATION,
-                 _ => classes::MEMORY, // Default
+                SynapseNodeType::Agent => classes::AGENT,
+                SynapseNodeType::DecisionRule => classes::DECISION_RULE,
+                SynapseNodeType::MemoryConversation => classes::CONVERSATION,
+                _ => classes::MEMORY, // Default
             };
 
             let mut triples = vec![
-                (node_uri.clone(), namespaces::RDF.to_owned() + "type", rdf_class.to_string()),
-                (node_uri.clone(), properties::HAS_CONTENT.to_string(), format!("\"{}\"", node.content.replace("\"", "\\\""))),
+                (
+                    node_uri.clone(),
+                    namespaces::RDF.to_owned() + "type",
+                    rdf_class.to_string(),
+                ),
+                (
+                    node_uri.clone(),
+                    properties::HAS_CONTENT.to_string(),
+                    format!("\"{}\"", node.content.replace("\"", "\\\"")),
+                ),
             ];
 
             if let Some(role) = node.agent_role {
-                triples.push((node_uri.clone(), properties::HAS_ROLE.to_string(), format!("\"{:?}\"", role)));
+                triples.push((
+                    node_uri.clone(),
+                    properties::HAS_ROLE.to_string(),
+                    format!("\"{:?}\"", role),
+                ));
             }
 
             self.ingest_triples(triples).await?;
@@ -280,20 +420,12 @@ impl GraphMemory for SynapseMemory {
             let s_uri = format!("{}{}", namespaces::ZEROCLAW, edge.source.as_str());
             let o_uri = format!("{}{}", namespaces::ZEROCLAW, edge.target.as_str());
 
-            // Map RelationType to RDF Property
-            let predicate = match edge.relation {
-                RelationType::CategoryMembership => namespaces::RDF.to_owned() + "type",
-                RelationType::DecisionConstraint => properties::RELATES_TO.to_string(), // refine
-                RelationType::MessageLink => properties::CONTEXT_FOR.to_string(),
-                RelationType::Custom(s) => format!("{}{}", namespaces::ZEROCLAW, s),
-            };
+            let predicate = Self::relation_to_predicate(&edge.relation);
 
-            self.ingest_triples(vec![
-                (s_uri, predicate, o_uri)
-            ]).await?;
+            self.ingest_triples(vec![(s_uri, predicate, o_uri)]).await?;
             Ok(())
         }
-         #[cfg(not(feature = "memory-synapse"))]
+        #[cfg(not(feature = "memory-synapse"))]
         Ok(())
     }
 
@@ -303,9 +435,16 @@ impl GraphMemory for SynapseMemory {
     ) -> anyhow::Result<Vec<GraphEdge>> {
         #[cfg(feature = "memory-synapse")]
         {
-             // Implementation would involve a SPARQL query to get edges connected to anchor
-             // For now return empty or mock implementation
-             Ok(Vec::new())
+            let sparql = build_neighborhood_query(&query);
+            let raw = self.store.query_sparql(&sparql)?;
+            let rows: Vec<Value> = serde_json::from_str(&raw)?;
+
+            let mut edges = Vec::with_capacity(rows.len());
+            for row in rows {
+                edges.push(Self::parse_graph_edge_binding(&row)?);
+            }
+
+            Ok(edges)
         }
         #[cfg(not(feature = "memory-synapse"))]
         Ok(Vec::new())
@@ -315,32 +454,177 @@ impl GraphMemory for SynapseMemory {
         &self,
         query: SemanticGraphQuery,
     ) -> anyhow::Result<Vec<GraphSearchResult>> {
-         #[cfg(feature = "memory-synapse")]
-         {
-             let results = self.store.hybrid_search(&query.text, query.limit, 1).await?;
-             let mut search_results = Vec::new();
+        #[cfg(feature = "memory-synapse")]
+        {
+            let results = self
+                .store
+                .hybrid_search(&query.text, query.limit, 1)
+                .await?;
+            let mut search_results = Vec::new();
 
-             for (uri, score) in results {
-                  // Construct GraphSearchResult from URI
-                  // We need to fetch node details (content, type) via SPARQL or helper
-                  // simplified:
-                  let id_str = uri.replace(namespaces::ZEROCLAW, "");
-                  let id = NodeId::new(id_str).unwrap_or(NodeId::new("unknown").unwrap());
+            for (uri, score) in results {
+                // Construct GraphSearchResult from URI
+                // We need to fetch node details (content, type) via SPARQL or helper
+                // simplified:
+                let id_str = uri.replace(namespaces::ZEROCLAW, "");
+                let id = NodeId::new(id_str).unwrap_or(NodeId::new("unknown").unwrap());
 
-                  search_results.push(GraphSearchResult {
-                      node: GraphNode {
-                          id,
-                          node_type: SynapseNodeType::MemoryCore, // fetch actual type
-                          content: "loaded from synapse".into(), // fetch actual content
-                          agent_role: None,
-                          decision_rule_id: None,
-                      },
-                      score,
-                  });
-             }
-             Ok(search_results)
-         }
-         #[cfg(not(feature = "memory-synapse"))]
-         Ok(Vec::new())
+                search_results.push(GraphSearchResult {
+                    node: GraphNode {
+                        id,
+                        node_type: SynapseNodeType::MemoryCore, // fetch actual type
+                        content: "loaded from synapse".into(),  // fetch actual content
+                        agent_role: None,
+                        decision_rule_id: None,
+                    },
+                    score,
+                });
+            }
+            Ok(search_results)
+        }
+        #[cfg(not(feature = "memory-synapse"))]
+        Ok(Vec::new())
+    }
+}
+
+#[cfg(all(test, feature = "memory-synapse"))]
+mod tests {
+    use super::*;
+    use crate::memory::graph_traits::EdgeDirection;
+    use tempfile::TempDir;
+
+    async fn setup_memory() -> anyhow::Result<(TempDir, SynapseMemory)> {
+        let temp_dir = TempDir::new()?;
+        let sqlite = SqliteMemory::new(temp_dir.path())?;
+        let memory = SynapseMemory::new(temp_dir.path(), sqlite)?;
+        Ok((temp_dir, memory))
+    }
+
+    #[tokio::test]
+    async fn query_by_neighborhood_outbound_returns_expected_edge() -> anyhow::Result<()> {
+        let (_tmp, memory) = setup_memory().await?;
+
+        memory
+            .ingest_triples(vec![(
+                format!("{}node-a", namespaces::ZEROCLAW),
+                properties::RELATES_TO.to_string(),
+                format!("{}node-b", namespaces::ZEROCLAW),
+            )])
+            .await?;
+
+        let edges = memory
+            .query_by_neighborhood(NeighborhoodQuery {
+                anchor: NodeId::new("node-a")?,
+                direction: EdgeDirection::Outbound,
+                relation: None,
+            })
+            .await?;
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].source, NodeId::new("node-a")?);
+        assert_eq!(edges[0].target, NodeId::new("node-b")?);
+        assert_eq!(edges[0].relation, RelationType::DecisionConstraint);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn query_by_neighborhood_inbound_returns_expected_edge() -> anyhow::Result<()> {
+        let (_tmp, memory) = setup_memory().await?;
+
+        memory
+            .ingest_triples(vec![(
+                format!("{}node-a", namespaces::ZEROCLAW),
+                properties::RELATES_TO.to_string(),
+                format!("{}node-b", namespaces::ZEROCLAW),
+            )])
+            .await?;
+
+        let edges = memory
+            .query_by_neighborhood(NeighborhoodQuery {
+                anchor: NodeId::new("node-b")?,
+                direction: EdgeDirection::Inbound,
+                relation: None,
+            })
+            .await?;
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].source, NodeId::new("node-a")?);
+        assert_eq!(edges[0].target, NodeId::new("node-b")?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn query_by_neighborhood_both_returns_outbound_and_inbound_edges() -> anyhow::Result<()> {
+        let (_tmp, memory) = setup_memory().await?;
+
+        memory
+            .ingest_triples(vec![
+                (
+                    format!("{}node-a", namespaces::ZEROCLAW),
+                    properties::RELATES_TO.to_string(),
+                    format!("{}node-b", namespaces::ZEROCLAW),
+                ),
+                (
+                    format!("{}node-c", namespaces::ZEROCLAW),
+                    properties::CONTEXT_FOR.to_string(),
+                    format!("{}node-a", namespaces::ZEROCLAW),
+                ),
+            ])
+            .await?;
+
+        let edges = memory
+            .query_by_neighborhood(NeighborhoodQuery {
+                anchor: NodeId::new("node-a")?,
+                direction: EdgeDirection::Both,
+                relation: None,
+            })
+            .await?;
+
+        assert_eq!(edges.len(), 2);
+        assert!(edges.iter().any(|edge| {
+            edge.source == NodeId::new("node-a").expect("valid")
+                && edge.target == NodeId::new("node-b").expect("valid")
+                && edge.relation == RelationType::DecisionConstraint
+        }));
+        assert!(edges.iter().any(|edge| {
+            edge.source == NodeId::new("node-c").expect("valid")
+                && edge.target == NodeId::new("node-a").expect("valid")
+                && edge.relation == RelationType::MessageLink
+        }));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn query_by_neighborhood_relation_filter_limits_results() -> anyhow::Result<()> {
+        let (_tmp, memory) = setup_memory().await?;
+
+        memory
+            .ingest_triples(vec![
+                (
+                    format!("{}node-a", namespaces::ZEROCLAW),
+                    properties::RELATES_TO.to_string(),
+                    format!("{}node-b", namespaces::ZEROCLAW),
+                ),
+                (
+                    format!("{}node-a", namespaces::ZEROCLAW),
+                    properties::CONTEXT_FOR.to_string(),
+                    format!("{}node-c", namespaces::ZEROCLAW),
+                ),
+            ])
+            .await?;
+
+        let edges = memory
+            .query_by_neighborhood(NeighborhoodQuery {
+                anchor: NodeId::new("node-a")?,
+                direction: EdgeDirection::Outbound,
+                relation: Some(RelationType::MessageLink),
+            })
+            .await?;
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].source, NodeId::new("node-a")?);
+        assert_eq!(edges[0].target, NodeId::new("node-c")?);
+        assert_eq!(edges[0].relation, RelationType::MessageLink);
+        Ok(())
     }
 }
