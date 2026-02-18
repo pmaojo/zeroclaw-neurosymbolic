@@ -195,10 +195,21 @@ async fn run_heartbeat_worker(config: Config) -> Result<()> {
 
         for task in tasks {
             let prompt = format!("[Heartbeat Task] {task}");
-            let temp = config.default_temperature;
-            if let Err(e) =
-                crate::agent::run(config.clone(), Some(prompt), None, None, temp, vec![]).await
-            {
+
+            let mut effective_config = config.clone();
+            effective_config.default_temperature = config.default_temperature;
+
+            let result = match crate::agent::agent::Agent::from_config(&effective_config) {
+                Ok(mut agent) => {
+                    match agent.turn(&prompt).await {
+                        Ok(_) => Ok(()),
+                        Err(e) => Err(e),
+                    }
+                },
+                Err(e) => Err(e),
+            };
+
+            if let Err(e) = result {
                 crate::health::mark_component_error("heartbeat", e.to_string());
                 tracing::warn!("Heartbeat task failed: {e}");
             } else {
