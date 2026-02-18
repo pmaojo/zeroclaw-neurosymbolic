@@ -757,6 +757,9 @@ pub struct MemoryConfig {
     /// Auto-hydrate from MEMORY_SNAPSHOT.md when brain.db is missing
     #[serde(default = "default_true")]
     pub auto_hydrate: bool,
+    /// Source policy for Synapse remote scenario loading.
+    #[serde(default)]
+    pub synapse_source_policy: SynapseSourcePolicyConfig,
 }
 
 fn default_embedding_provider() -> String {
@@ -821,6 +824,34 @@ impl Default for MemoryConfig {
             snapshot_enabled: false,
             snapshot_on_hygiene: false,
             auto_hydrate: true,
+            synapse_source_policy: SynapseSourcePolicyConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SynapseSourcePolicyConfig {
+    /// Allow downloading Synapse scenarios/registries from remote HTTP(S) sources.
+    #[serde(default)]
+    pub allow_remote_scenarios: bool,
+    /// Exact host allowlist for remote registry/scenario downloads.
+    #[serde(default)]
+    pub allowed_registry_hosts: Vec<String>,
+    /// Maximum size in bytes for any downloaded remote scenario artifact.
+    #[serde(default = "default_synapse_max_download_size_bytes")]
+    pub max_download_size_bytes: usize,
+}
+
+fn default_synapse_max_download_size_bytes() -> usize {
+    5 * 1024 * 1024
+}
+
+impl Default for SynapseSourcePolicyConfig {
+    fn default() -> Self {
+        Self {
+            allow_remote_scenarios: false,
+            allowed_registry_hosts: Vec::new(),
+            max_download_size_bytes: default_synapse_max_download_size_bytes(),
         }
     }
 }
@@ -2255,6 +2286,58 @@ default_temperature = 0.7
         assert_eq!(m.archive_after_days, 7);
         assert_eq!(m.purge_after_days, 30);
         assert_eq!(m.conversation_retention_days, 30);
+    }
+
+    #[test]
+    fn memory_config_default_synapse_source_policy_is_deny_by_default() {
+        let m = MemoryConfig::default();
+        assert!(!m.synapse_source_policy.allow_remote_scenarios);
+        assert!(m.synapse_source_policy.allowed_registry_hosts.is_empty());
+        assert_eq!(
+            m.synapse_source_policy.max_download_size_bytes,
+            5 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn memory_config_synapse_source_policy_toml_roundtrip() {
+        let memory = MemoryConfig {
+            backend: "synapse".into(),
+            auto_save: true,
+            hygiene_enabled: true,
+            archive_after_days: 7,
+            purge_after_days: 30,
+            conversation_retention_days: 30,
+            embedding_provider: "none".into(),
+            embedding_model: "text-embedding-3-small".into(),
+            embedding_dimensions: 1536,
+            vector_weight: 0.7,
+            keyword_weight: 0.3,
+            embedding_cache_size: 10_000,
+            chunk_max_tokens: 512,
+            response_cache_enabled: false,
+            response_cache_ttl_minutes: 60,
+            response_cache_max_entries: 5_000,
+            snapshot_enabled: false,
+            snapshot_on_hygiene: false,
+            auto_hydrate: true,
+            synapse_source_policy: SynapseSourcePolicyConfig {
+                allow_remote_scenarios: true,
+                allowed_registry_hosts: vec!["registry.example.com".into()],
+                max_download_size_bytes: 123_456,
+            },
+        };
+        let toml_text = toml::to_string(&memory).unwrap();
+        let parsed: MemoryConfig = toml::from_str(&toml_text).unwrap();
+        assert!(parsed.synapse_source_policy.allow_remote_scenarios);
+        assert_eq!(
+            parsed.synapse_source_policy.allowed_registry_hosts,
+            vec!["registry.example.com"]
+        );
+        assert_eq!(
+            parsed.synapse_source_policy.max_download_size_bytes,
+            123_456
+        );
     }
 
     #[test]
