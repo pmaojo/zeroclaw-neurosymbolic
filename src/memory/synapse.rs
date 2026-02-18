@@ -18,6 +18,8 @@ use std::sync::Arc;
 #[cfg(feature = "memory-synapse")]
 use crate::memory::synapse::ontology::{classes, namespaces, properties};
 #[cfg(feature = "memory-synapse")]
+use synapse_core::ingest::IngestionEngine;
+#[cfg(feature = "memory-synapse")]
 use synapse_core::scenarios::{ScenarioManager, ScenarioSourcePolicy};
 #[cfg(feature = "memory-synapse")]
 use synapse_core::store::{IngestTriple, Provenance, SynapseStore};
@@ -110,17 +112,22 @@ impl SynapseMemory {
     /// Import ontology from a URL (e.g. Turtle/RDF)
     #[cfg(feature = "memory-synapse")]
     pub async fn import_ontology(&self, url: &str) -> anyhow::Result<()> {
-        // synapse-core's ScenarioManager or Store might expose this,
-        // or we can just fetch and parse ourselves if needed.
-        // For now, let's assume we can fetch and ingest as raw triples if format is simple,
-        // but robust implementation would use oxigraph's parser.
-        // Since synapse-core manages ingestion, let's verify if it exposes a direct import.
-        // Looking at synapse-core source, it has `ingest::ingest_file`.
-        // We will implement a basic fetch-and-ingest here using reqwest + oxigraph if needed,
-        // or just placeholder for the concept if synapse-core has a dedicated method we missed.
+        let path = if let Some(path) = url.strip_prefix("file://") {
+            std::path::PathBuf::from(path)
+        } else if url.starts_with("http://") || url.starts_with("https://") {
+            anyhow::bail!(
+                "remote ontology imports are not supported in this runtime path; use a local file path"
+            );
+        } else {
+            std::path::PathBuf::from(url)
+        };
 
-        // Let's rely on SynapseStore's capabilities.
-        // If not directly available, we can add it later.
+        if !path.exists() {
+            anyhow::bail!("ontology file does not exist: {}", path.display());
+        }
+
+        let ingestion_engine = IngestionEngine::new(self.store.clone());
+        ingestion_engine.ingest_file(&path, "zeroclaw").await?;
         Ok(())
     }
 
@@ -224,6 +231,95 @@ impl SynapseMemory {
             relation: Self::predicate_to_relation(predicate_uri.trim_matches(['<', '>']))?,
         })
     }
+
+    #[cfg(feature = "memory-synapse")]
+    fn class_to_node_type(class_uri: &str) -> anyhow::Result<SynapseNodeType> {
+        match class_uri {
+            classes::AGENT => Ok(SynapseNodeType::Agent),
+            classes::DECISION_RULE => Ok(SynapseNodeType::DecisionRule),
+            classes::CONVERSATION => Ok(SynapseNodeType::MemoryConversation),
+            classes::MEMORY_DAILY => Ok(SynapseNodeType::MemoryDaily),
+            classes::MEMORY_CUSTOM => Ok(SynapseNodeType::MemoryCustom),
+            classes::MEMORY => Ok(SynapseNodeType::MemoryCore),
+            _ => anyhow::bail!("unsupported node class URI: {class_uri}"),
+        }
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    fn parse_agent_role(raw: &str) -> anyhow::Result<Option<super::graph_traits::AgentRole>> {
+        let normalized = raw.trim_matches(['<', '>', '"']).to_ascii_lowercase();
+        let role = match normalized.as_str() {
+            "" => None,
+            "user" => Some(super::graph_traits::AgentRole::User),
+            "assistant" => Some(super::graph_traits::AgentRole::Assistant),
+            "system" => Some(super::graph_traits::AgentRole::System),
+            "tool" => Some(super::graph_traits::AgentRole::Tool),
+            _ => anyhow::bail!("unsupported agent role value: {raw}"),
+        };
+        Ok(role)
+    }
+
+    #[cfg(feature = "memory-synapse")]
+    fn hydrate_graph_node(&self, uri: &str) -> anyhow::Result<GraphNode> {
+        let clean_uri = uri.trim().trim_start_matches('<').trim_end_matches('>');
+        let query = format!(
+            "SELECT ?predicate ?object WHERE {{ <{}> ?predicate ?object . }} ORDER BY ?predicate",
+            clean_uri
+        );
+        let raw = self.store.query_sparql(&query)?;
+        let rows: Vec<Value> = serde_json::from_str(&raw)?;
+
+        let mut node_type = None;
+        let mut content = None;
+        let mut agent_role = None;
+
+        for row in rows {
+            let predicate = row
+                .get("predicate")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("missing predicate binding: {row}"))?
+                .trim_matches(['<', '>']);
+            let object = row
+                .get("object")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("missing object binding: {row}"))?;
+
+            if predicate == (namespaces::RDF.to_owned() + "type") {
+                node_type = Some(Self::class_to_node_type(object.trim_matches(['<', '>']))?);
+                continue;
+            }
+            if predicate == properties::HAS_CONTENT {
+                content = Some(object.trim_matches('"').to_string());
+                continue;
+            }
+            if predicate == properties::HAS_ROLE {
+                agent_role = Self::parse_agent_role(object)?;
+            }
+        }
+
+        Ok(GraphNode {
+            id: Self::uri_to_node_id(clean_uri)?,
+            node_type: node_type.ok_or_else(|| {
+                anyhow::anyhow!("missing rdf:type triple while hydrating node: {clean_uri}")
+            })?,
+            content: content.ok_or_else(|| {
+                anyhow::anyhow!("missing hasContent triple while hydrating node: {clean_uri}")
+            })?,
+            agent_role,
+            decision_rule_id: None,
+        })
+    }
+}
+
+#[cfg(feature = "memory-synapse")]
+fn build_relation_presence_query(node_id: &NodeId, relation: &RelationType) -> String {
+    let node_uri = SynapseMemory::node_id_to_uri(node_id);
+    let predicate = SynapseMemory::relation_to_predicate(relation);
+    format!(
+        "ASK {{ {{ <{node}> <{pred}> ?target . FILTER(isIRI(?target)) }} UNION {{ ?source <{pred}> <{node}> . FILTER(isIRI(?source)) }} }}",
+        node = node_uri,
+        pred = predicate,
+    )
 }
 
 #[cfg(feature = "memory-synapse")]
@@ -414,7 +510,9 @@ impl GraphMemory for SynapseMemory {
                 SynapseNodeType::Agent => classes::AGENT,
                 SynapseNodeType::DecisionRule => classes::DECISION_RULE,
                 SynapseNodeType::MemoryConversation => classes::CONVERSATION,
-                _ => classes::MEMORY, // Default
+                SynapseNodeType::MemoryDaily => classes::MEMORY_DAILY,
+                SynapseNodeType::MemoryCustom => classes::MEMORY_CUSTOM,
+                SynapseNodeType::MemoryCore => classes::MEMORY,
             };
 
             let mut triples = vec![
@@ -494,21 +592,40 @@ impl GraphMemory for SynapseMemory {
             let mut search_results = Vec::new();
 
             for (uri, score) in results {
-                // Construct GraphSearchResult from URI
-                // We need to fetch node details (content, type) via SPARQL or helper
-                // simplified:
-                let id = Self::uri_to_node_id(&uri)?;
+                let node = self.hydrate_graph_node(&uri)?;
 
-                search_results.push(GraphSearchResult {
-                    node: GraphNode {
-                        id,
-                        node_type: SynapseNodeType::MemoryCore, // fetch actual type
-                        content: "loaded from synapse".into(),  // fetch actual content
-                        agent_role: None,
-                        decision_rule_id: None,
-                    },
-                    score,
-                });
+                if let Some(filter) = &query.filter {
+                    if filter
+                        .node_type
+                        .as_ref()
+                        .is_some_and(|expected| expected != &node.node_type)
+                    {
+                        continue;
+                    }
+                    if filter
+                        .agent_role
+                        .as_ref()
+                        .is_some_and(|expected| node.agent_role.as_ref() != Some(expected))
+                    {
+                        continue;
+                    }
+                    if filter
+                        .decision_rule_id
+                        .as_ref()
+                        .is_some_and(|expected| node.decision_rule_id.as_ref() != Some(expected))
+                    {
+                        continue;
+                    }
+                    if let Some(relation) = filter.relation.as_ref() {
+                        let relation_query = build_relation_presence_query(&node.id, relation);
+                        let relation_raw = self.store.query_sparql(&relation_query)?;
+                        if !relation_raw.contains("true") {
+                            continue;
+                        }
+                    }
+                }
+
+                search_results.push(GraphSearchResult { node, score });
             }
             Ok(search_results)
         }
@@ -724,6 +841,158 @@ mod tests {
         assert!(results
             .iter()
             .all(|result| result.node.id.as_str() != "unknown"));
+        Ok(())
+    }
+
+    #[test]
+    fn hydrate_graph_node_reads_type_content_and_role() -> anyhow::Result<()> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(async {
+            let (_tmp, memory) = setup_memory().await?;
+
+            memory
+                .upsert_node(GraphNodeUpsert {
+                    id: NodeId::new("agent-node")?,
+                    node_type: SynapseNodeType::Agent,
+                    content: "agent content".to_string(),
+                    agent_role: Some(super::graph_traits::AgentRole::Assistant),
+                    decision_rule_id: None,
+                })
+                .await?;
+
+            let node = memory.hydrate_graph_node(&format!("{}agent-node", namespaces::ZEROCLAW))?;
+
+            assert_eq!(node.id, NodeId::new("agent-node")?);
+            assert_eq!(node.node_type, SynapseNodeType::Agent);
+            assert_eq!(node.content, "agent content");
+            assert_eq!(
+                node.agent_role,
+                Some(super::graph_traits::AgentRole::Assistant)
+            );
+            Ok(())
+        })
+    }
+
+    #[tokio::test]
+    async fn semantic_search_relation_filter_only_returns_linked_nodes() -> anyhow::Result<()> {
+        let (_tmp, memory) = setup_memory().await?;
+
+        memory
+            .upsert_node(GraphNodeUpsert {
+                id: NodeId::new("linked-node")?,
+                node_type: SynapseNodeType::MemoryCore,
+                content: "alpha searchable".to_string(),
+                agent_role: None,
+                decision_rule_id: None,
+            })
+            .await?;
+        memory
+            .upsert_node(GraphNodeUpsert {
+                id: NodeId::new("unlinked-node")?,
+                node_type: SynapseNodeType::MemoryCore,
+                content: "alpha searchable".to_string(),
+                agent_role: None,
+                decision_rule_id: None,
+            })
+            .await?;
+        memory
+            .upsert_node(GraphNodeUpsert {
+                id: NodeId::new("context-anchor")?,
+                node_type: SynapseNodeType::MemoryCore,
+                content: "anchor".to_string(),
+                agent_role: None,
+                decision_rule_id: None,
+            })
+            .await?;
+
+        memory
+            .upsert_typed_edge(GraphEdgeUpsert {
+                source: NodeId::new("linked-node")?,
+                target: NodeId::new("context-anchor")?,
+                relation: RelationType::MessageLink,
+            })
+            .await?;
+
+        let results = memory
+            .semantic_search_with_filters(SemanticGraphQuery {
+                text: "alpha".to_string(),
+                limit: 10,
+                filter: Some(super::graph_traits::SemanticSymbolicFilter {
+                    relation: Some(RelationType::MessageLink),
+                    node_type: Some(SynapseNodeType::MemoryCore),
+                    agent_role: None,
+                    decision_rule_id: None,
+                }),
+            })
+            .await?;
+
+        assert!(results.iter().any(|r| r.node.id.as_str() == "linked-node"));
+        assert!(!results
+            .iter()
+            .any(|r| r.node.id.as_str() == "unlinked-node"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upsert_and_hydrate_roundtrip_memory_daily_and_custom_types() -> anyhow::Result<()> {
+        let (_tmp, memory) = setup_memory().await?;
+
+        memory
+            .upsert_node(GraphNodeUpsert {
+                id: NodeId::new("daily-node")?,
+                node_type: SynapseNodeType::MemoryDaily,
+                content: "daily content".to_string(),
+                agent_role: None,
+                decision_rule_id: None,
+            })
+            .await?;
+        memory
+            .upsert_node(GraphNodeUpsert {
+                id: NodeId::new("custom-node")?,
+                node_type: SynapseNodeType::MemoryCustom,
+                content: "custom content".to_string(),
+                agent_role: None,
+                decision_rule_id: None,
+            })
+            .await?;
+
+        let daily = memory.hydrate_graph_node(&format!("{}daily-node", namespaces::ZEROCLAW))?;
+        let custom = memory.hydrate_graph_node(&format!("{}custom-node", namespaces::ZEROCLAW))?;
+
+        assert_eq!(daily.node_type, SynapseNodeType::MemoryDaily);
+        assert_eq!(custom.node_type, SynapseNodeType::MemoryCustom);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn import_ontology_local_ttl_ingests_triple() -> anyhow::Result<()> {
+        let (tmp, memory) = setup_memory().await?;
+        let ontology_path = tmp.path().join("sample.ttl");
+
+        tokio::fs::write(
+            &ontology_path,
+            "<http://zeroclaw.ai/schema#onto-a> <http://zeroclaw.ai/schema#relatesTo> <http://zeroclaw.ai/schema#onto-b> .\n",
+        )
+        .await?;
+
+        memory
+            .import_ontology(
+                ontology_path
+                    .to_str()
+                    .ok_or_else(|| anyhow::anyhow!("ontology path is not valid utf-8"))?,
+            )
+            .await?;
+
+        let ask_query = format!(
+            "ASK {{ <{}onto-a> <{}> <{}onto-b> }}",
+            namespaces::ZEROCLAW,
+            properties::RELATES_TO,
+            namespaces::ZEROCLAW
+        );
+        let result = memory.query_sparql(&ask_query)?;
+        assert!(result.contains("true"));
+
         Ok(())
     }
 }

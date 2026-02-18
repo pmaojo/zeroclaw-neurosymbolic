@@ -16,6 +16,8 @@ pub mod classes {
     pub const TASK: &str = concat!("http://zeroclaw.ai/schema#", "Task");
     pub const TOOL: &str = concat!("http://zeroclaw.ai/schema#", "Tool");
     pub const MEMORY: &str = concat!("http://zeroclaw.ai/schema#", "Memory");
+    pub const MEMORY_DAILY: &str = concat!("http://zeroclaw.ai/schema#", "MemoryDaily");
+    pub const MEMORY_CUSTOM: &str = concat!("http://zeroclaw.ai/schema#", "MemoryCustom");
     pub const SKILL: &str = concat!("http://zeroclaw.ai/schema#", "Skill");
     pub const DECISION_RULE: &str = concat!("http://zeroclaw.ai/schema#", "DecisionRule");
     pub const CONVERSATION: &str = concat!("http://zeroclaw.ai/schema#", "Conversation");

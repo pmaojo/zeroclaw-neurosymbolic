@@ -1,10 +1,9 @@
-
-use anyhow::Result;
-use serde_json::Value;
+#[cfg(feature = "memory-synapse")]
+use crate::memory::synapse::ontology::{classes, namespaces, properties, task_status};
 #[cfg(feature = "memory-synapse")]
 use crate::memory::SynapseMemory;
-#[cfg(feature = "memory-synapse")]
-use crate::memory::synapse::ontology::{classes, properties, namespaces, task_status};
+use anyhow::Result;
+use serde_json::Value;
 use uuid::Uuid;
 
 pub struct SwarmManager {
@@ -22,7 +21,9 @@ impl SwarmManager {
 
     #[cfg(not(feature = "memory-synapse"))]
     pub fn new() -> Self {
-        Self { _marker: std::marker::PhantomData }
+        Self {
+            _marker: std::marker::PhantomData,
+        }
     }
 
     /// Heartbeat: Check for pending tasks for this agent
@@ -63,11 +64,35 @@ impl SwarmManager {
             let task_uri = format!("{}Task/{}", namespaces::ZEROCLAW, task_id);
 
             let triples = vec![
-                (task_uri.clone(), namespaces::RDF.to_owned() + "type", classes::TASK.to_string()),
-                (task_uri.clone(), properties::HAS_CONTENT.to_string(), format!("\"{}\"", description.replace("\"", "\\\""))),
-                (task_uri.clone(), properties::HAS_STATUS.to_string(), task_status::PENDING.to_string()),
-                (task_uri.clone(), properties::HAS_PRIORITY.to_string(), format!("\"{}\"^^<{}>", priority, namespaces::XSD.to_owned() + "integer")),
-                (task_uri.clone(), properties::CREATED_AT.to_string(), format!("\"{}\"", chrono::Utc::now().to_rfc3339())),
+                (
+                    task_uri.clone(),
+                    namespaces::RDF.to_owned() + "type",
+                    classes::TASK.to_string(),
+                ),
+                (
+                    task_uri.clone(),
+                    properties::HAS_CONTENT.to_string(),
+                    format!("\"{}\"", description.replace("\"", "\\\"")),
+                ),
+                (
+                    task_uri.clone(),
+                    properties::HAS_STATUS.to_string(),
+                    task_status::PENDING.to_string(),
+                ),
+                (
+                    task_uri.clone(),
+                    properties::HAS_PRIORITY.to_string(),
+                    format!(
+                        "\"{}\"^^<{}>",
+                        priority,
+                        namespaces::XSD.to_owned() + "integer"
+                    ),
+                ),
+                (
+                    task_uri.clone(),
+                    properties::CREATED_AT.to_string(),
+                    format!("\"{}\"", chrono::Utc::now().to_rfc3339()),
+                ),
             ];
 
             self.memory.ingest_triples(triples).await?;
@@ -84,14 +109,30 @@ impl SwarmManager {
         {
             let agent_uri = format!("{}{}", namespaces::ZEROCLAW, agent_id);
             let mut triples = vec![
-                (agent_uri.clone(), namespaces::RDF.to_owned() + "type", classes::AGENT.to_string()),
-                (agent_uri.clone(), properties::HAS_ROLE.to_string(), format!("\"{}\"", role)),
+                (
+                    agent_uri.clone(),
+                    namespaces::RDF.to_owned() + "type",
+                    classes::AGENT.to_string(),
+                ),
+                (
+                    agent_uri.clone(),
+                    properties::HAS_ROLE.to_string(),
+                    format!("\"{}\"", role),
+                ),
             ];
 
             for tool in tools {
-                 let tool_uri = format!("{}Tool/{}", namespaces::ZEROCLAW, tool);
-                 triples.push((agent_uri.clone(), properties::HAS_TOOL.to_string(), tool_uri.clone()));
-                 triples.push((tool_uri, namespaces::RDF.to_owned() + "type", classes::TOOL.to_string()));
+                let tool_uri = format!("{}Tool/{}", namespaces::ZEROCLAW, tool);
+                triples.push((
+                    agent_uri.clone(),
+                    properties::HAS_TOOL.to_string(),
+                    tool_uri.clone(),
+                ));
+                triples.push((
+                    tool_uri,
+                    namespaces::RDF.to_owned() + "type",
+                    classes::TOOL.to_string(),
+                ));
             }
 
             self.memory.ingest_triples(triples).await?;
@@ -104,13 +145,13 @@ impl SwarmManager {
     pub async fn build_system_context(&self, agent_id: &str) -> Result<String> {
         #[cfg(feature = "memory-synapse")]
         {
-             let agent_uri = format!("{}{}", namespaces::ZEROCLAW, agent_id);
+            let agent_uri = format!("{}{}", namespaces::ZEROCLAW, agent_id);
 
-             // 1. Fetch Role
-             // 2. Fetch Tools
-             // 3. Fetch Active Task Context
+            // 1. Fetch Role
+            // 2. Fetch Tools
+            // 3. Fetch Active Task Context
 
-             let query = format!(
+            let query = format!(
                 "SELECT ?role ?tool WHERE {{
                     <{agent}> <{has_role}> ?role .
                     OPTIONAL {{ <{agent}> <{has_tool}> ?tool }}
