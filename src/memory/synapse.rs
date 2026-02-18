@@ -7,6 +7,7 @@ use super::graph_traits::{
 #[cfg(feature = "memory-synapse")]
 use super::sqlite::SqliteMemory;
 use super::traits::{Memory, MemoryCategory, MemoryEntry};
+use crate::config::SynapseSourcePolicyConfig;
 use async_trait::async_trait;
 #[cfg(feature = "memory-synapse")]
 use serde_json::Value;
@@ -17,7 +18,7 @@ use std::sync::Arc;
 #[cfg(feature = "memory-synapse")]
 use crate::memory::synapse::ontology::{classes, namespaces, properties};
 #[cfg(feature = "memory-synapse")]
-use synapse_core::scenarios::ScenarioManager;
+use synapse_core::scenarios::{ScenarioManager, ScenarioSourcePolicy};
 #[cfg(feature = "memory-synapse")]
 use synapse_core::store::{IngestTriple, Provenance, SynapseStore};
 
@@ -35,12 +36,21 @@ pub struct SynapseMemory {
 
 impl SynapseMemory {
     #[cfg(feature = "memory-synapse")]
-    pub fn new(workspace_dir: &Path, local: SqliteMemory) -> anyhow::Result<Self> {
+    pub fn new(
+        workspace_dir: &Path,
+        local: SqliteMemory,
+        source_policy: SynapseSourcePolicyConfig,
+    ) -> anyhow::Result<Self> {
         let namespace = "zeroclaw";
         // SynapseStore expects the parent directory path
         let store = SynapseStore::open(namespace, workspace_dir.to_str().unwrap())?;
 
-        let scenario_manager = ScenarioManager::new(workspace_dir);
+        let scenario_policy = ScenarioSourcePolicy {
+            allow_remote_scenarios: source_policy.allow_remote_scenarios,
+            allowed_registry_hosts: source_policy.allowed_registry_hosts,
+            max_download_size_bytes: source_policy.max_download_size_bytes,
+        };
+        let scenario_manager = ScenarioManager::with_policy(workspace_dir, scenario_policy);
 
         Ok(Self {
             local,
@@ -50,7 +60,11 @@ impl SynapseMemory {
     }
 
     #[cfg(not(feature = "memory-synapse"))]
-    pub fn new(workspace_dir: &Path, _local: super::sqlite::SqliteMemory) -> anyhow::Result<Self> {
+    pub fn new(
+        workspace_dir: &Path,
+        _local: super::sqlite::SqliteMemory,
+        _source_policy: SynapseSourcePolicyConfig,
+    ) -> anyhow::Result<Self> {
         let _workspace_dir = workspace_dir;
         anyhow::bail!(
             "memory backend 'synapse' requires feature 'memory-synapse'; using sqlite fallback"
@@ -115,11 +129,20 @@ impl SynapseMemory {
     pub async fn list_scenarios(
         &self,
     ) -> anyhow::Result<Vec<synapse_core::scenarios::RegistryEntry>> {
+        tracing::info!(
+            operation = "synapse_list_scenarios",
+            "Listing Synapse scenarios with configured source policy"
+        );
         self.scenario_manager.list_scenarios().await
     }
 
     #[cfg(feature = "memory-synapse")]
     pub async fn install_scenario(&self, name: &str) -> anyhow::Result<std::path::PathBuf> {
+        tracing::info!(
+            operation = "synapse_install_scenario",
+            scenario = name,
+            "Installing Synapse scenario with configured source policy"
+        );
         self.scenario_manager.install_scenario(name).await
     }
 
@@ -496,7 +519,11 @@ mod tests {
     async fn setup_memory() -> anyhow::Result<(TempDir, SynapseMemory)> {
         let temp_dir = TempDir::new()?;
         let sqlite = SqliteMemory::new(temp_dir.path())?;
-        let memory = SynapseMemory::new(temp_dir.path(), sqlite)?;
+        let memory = SynapseMemory::new(
+            temp_dir.path(),
+            sqlite,
+            SynapseSourcePolicyConfig::default(),
+        )?;
         Ok((temp_dir, memory))
     }
 

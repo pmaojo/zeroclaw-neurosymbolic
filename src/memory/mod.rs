@@ -51,7 +51,7 @@ where
         }
         MemoryBackendKind::Synapse => {
             let local = sqlite_builder()?;
-            match SynapseMemory::new(workspace_dir, local) {
+            match SynapseMemory::new(workspace_dir, local, config.synapse_source_policy.clone()) {
                 Ok(memory) => Ok(Box::new(memory)),
                 Err(error) => {
                     tracing::warn!(
