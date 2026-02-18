@@ -151,8 +151,12 @@ landlock = ["sandbox-landlock"]
 probe = ["dep:probe-rs"]
 # rag-pdf = PDF ingestion for datasheet RAG
 rag-pdf = ["dep:pdf-extract"]
-# memory-synapse = Synapse memory backend integration
+# memory-synapse = Synapse memory backend integration (base only)
 memory-synapse = ["dep:synapse-core", "dep:oxigraph"]
+# memory-synapse-local = Synapse memory with local Candle embeddings (heavy)
+memory-synapse-local = ["memory-synapse", "synapse-core/local-embeddings"]
+# memory-synapse-remote = Synapse memory with remote Hugging Face API embeddings (light)
+memory-synapse-remote = ["memory-synapse", "synapse-core/remote-embeddings"]
 [profile.release]
 opt-level = "z"      # Optimize for size
 lto = "thin"         # Lower memory use during release builds

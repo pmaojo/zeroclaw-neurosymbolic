@@ -132,7 +132,7 @@ impl SynapseMemory {
     }
 
     #[cfg(feature = "memory-synapse")]
-    pub fn store(&self) -> &SynapseStore {
+    pub fn get_store(&self) -> &SynapseStore {
         &self.store
     }
 
@@ -946,7 +946,7 @@ mod tests {
                     id: NodeId::new("agent-node")?,
                     node_type: SynapseNodeType::Agent,
                     content: "agent content".to_string(),
-                    agent_role: Some(super::graph_traits::AgentRole::Assistant),
+                    agent_role: Some(crate::memory::graph_traits::AgentRole::Assistant),
                     decision_rule_id: None,
                 })
                 .await?;
@@ -958,7 +958,7 @@ mod tests {
             assert_eq!(node.content, "agent content");
             assert_eq!(
                 node.agent_role,
-                Some(super::graph_traits::AgentRole::Assistant)
+                Some(crate::memory::graph_traits::AgentRole::Assistant)
             );
             Ok(())
         })
@@ -983,8 +983,9 @@ mod tests {
             )
             .await?;
 
+        // Query across all named graphs since import_ontology uses a provenance-based named graph
         let ask_query = format!(
-            "ASK {{ <{}onto-a> <{}> <{}onto-b> }}",
+            "ASK {{ GRAPH ?g {{ <{}onto-a> <{}> <{}onto-b> }} }}",
             namespaces::ZEROCLAW,
             properties::RELATES_TO,
             namespaces::ZEROCLAW

@@ -4,6 +4,7 @@ mod synapse_tests {
     use std::sync::Arc;
     use tempfile::TempDir;
     use zeroclaw::agent::synapse::{Orchestrator, SwarmManager};
+    use zeroclaw::config::SynapseSourcePolicyConfig;
     use zeroclaw::memory::graph_traits::{
         EdgeDirection, GraphMemory, NeighborhoodQuery, NodeId, RelationType,
     };
@@ -17,7 +18,11 @@ mod synapse_tests {
 
         // 1. Initialize Memory
         let sqlite = SqliteMemory::new(workspace)?;
-        let memory = Arc::new(SynapseMemory::new(workspace, sqlite)?);
+        let memory = Arc::new(SynapseMemory::new(
+            workspace,
+            sqlite,
+            SynapseSourcePolicyConfig::default(),
+        )?);
 
         // 2. Register Agent via SwarmManager
         let swarm = SwarmManager::new(memory.clone());
@@ -106,7 +111,11 @@ mod synapse_tests {
         let workspace = tmp.path();
 
         let sqlite = SqliteMemory::new(workspace)?;
-        let memory = Arc::new(SynapseMemory::new(workspace, sqlite)?);
+        let memory = Arc::new(SynapseMemory::new(
+            workspace,
+            sqlite,
+            SynapseSourcePolicyConfig::default(),
+        )?);
 
         memory
             .ingest_triples(vec![(

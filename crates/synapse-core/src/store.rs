@@ -365,6 +365,7 @@ impl SynapseStore {
                 }
                 Ok(serde_json::to_string(&results_array)?)
             }
+            QueryResults::Boolean(b) => Ok(b.to_string()),
             _ => Ok("[]".to_string()),
         }
     }
