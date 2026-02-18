@@ -18,11 +18,61 @@ use std::sync::Arc;
 #[cfg(feature = "memory-synapse")]
 use crate::memory::synapse::ontology::{classes, namespaces, properties};
 #[cfg(feature = "memory-synapse")]
-use synapse_core::ingest::IngestionEngine;
-#[cfg(feature = "memory-synapse")]
 use synapse_core::scenarios::{ScenarioManager, ScenarioSourcePolicy};
 #[cfg(feature = "memory-synapse")]
 use synapse_core::store::{IngestTriple, Provenance, SynapseStore};
+
+#[cfg(feature = "memory-synapse")]
+const MAX_ONTOLOGY_IMPORT_BYTES: u64 = 5 * 1024 * 1024;
+
+#[cfg(feature = "memory-synapse")]
+#[derive(Debug, Clone, Copy)]
+enum OntologyImportFormat {
+    Turtle,
+    RdfXml,
+}
+
+#[cfg(feature = "memory-synapse")]
+impl OntologyImportFormat {
+    fn from_path(path: &Path) -> anyhow::Result<Self> {
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_ascii_lowercase())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "ontology file must include a supported extension (.ttl, .rdf, .xml)"
+                )
+            })?;
+
+        match extension.as_str() {
+            "ttl" => Ok(Self::Turtle),
+            "rdf" | "xml" => Ok(Self::RdfXml),
+            _ => anyhow::bail!(
+                "unsupported ontology format '{}'; only Turtle (.ttl) and RDF/XML (.rdf, .xml) are accepted",
+                extension
+            ),
+        }
+    }
+
+    fn parser(self) -> oxigraph::io::GraphParser {
+        match self {
+            Self::Turtle => {
+                oxigraph::io::GraphParser::from_format(oxigraph::io::GraphFormat::Turtle)
+            }
+            Self::RdfXml => {
+                oxigraph::io::GraphParser::from_format(oxigraph::io::GraphFormat::RdfXml)
+            }
+        }
+    }
+
+    fn method_label(self) -> &'static str {
+        match self {
+            Self::Turtle => "ontology_import_turtle",
+            Self::RdfXml => "ontology_import_rdf_xml",
+        }
+    }
+}
 
 pub struct SynapseMemory {
     #[cfg(feature = "memory-synapse")]
@@ -126,8 +176,58 @@ impl SynapseMemory {
             anyhow::bail!("ontology file does not exist: {}", path.display());
         }
 
-        let ingestion_engine = IngestionEngine::new(self.store.clone());
-        ingestion_engine.ingest_file(&path, "zeroclaw").await?;
+        if !path.is_file() {
+            anyhow::bail!(
+                "ontology import path must point to a file: {}",
+                path.display()
+            );
+        }
+
+        let format = OntologyImportFormat::from_path(&path)?;
+        let metadata = tokio::fs::metadata(&path).await?;
+        if metadata.len() > MAX_ONTOLOGY_IMPORT_BYTES {
+            anyhow::bail!(
+                "ontology file '{}' exceeds max allowed size of {} bytes",
+                path.display(),
+                MAX_ONTOLOGY_IMPORT_BYTES
+            );
+        }
+
+        let parse_file = std::fs::File::open(&path)?;
+        let parser = format.parser();
+        let import_timestamp = chrono::Utc::now().to_rfc3339();
+        let provenance_source = path.display().to_string();
+        let mut parsed_triples = Vec::new();
+
+        for triple_result in parser.read_triples(std::io::BufReader::new(parse_file))? {
+            let triple = triple_result.map_err(|error| {
+                anyhow::anyhow!(
+                    "ontology parsing failed for '{}': {}",
+                    path.display(),
+                    error
+                )
+            })?;
+
+            parsed_triples.push(IngestTriple {
+                subject: triple.subject.to_string(),
+                predicate: triple.predicate.to_string(),
+                object: triple.object.to_string(),
+                provenance: Some(Provenance {
+                    source: provenance_source.clone(),
+                    timestamp: import_timestamp.clone(),
+                    method: format.method_label().to_string(),
+                }),
+            });
+        }
+
+        if parsed_triples.is_empty() {
+            anyhow::bail!(
+                "ontology '{}' did not contain any triples; refusing empty import",
+                path.display()
+            );
+        }
+
+        self.store.ingest_triples(parsed_triples).await?;
         Ok(())
     }
 
@@ -892,6 +992,81 @@ mod tests {
         let result = memory.query_sparql(&ask_query)?;
         assert!(result.contains("true"));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn import_ontology_rejects_unsupported_extension() -> anyhow::Result<()> {
+        let (tmp, memory) = setup_memory().await?;
+        let ontology_path = tmp.path().join("sample.nt");
+        tokio::fs::write(
+            &ontology_path,
+            "<http://zeroclaw.ai/schema#onto-a> <http://zeroclaw.ai/schema#relatesTo> <http://zeroclaw.ai/schema#onto-b> .\n",
+        )
+        .await?;
+
+        let err = memory
+            .import_ontology(
+                ontology_path
+                    .to_str()
+                    .ok_or_else(|| anyhow::anyhow!("ontology path is not valid utf-8"))?,
+            )
+            .await
+            .expect_err("unsupported format must fail");
+
+        assert!(
+            err.to_string().contains("unsupported ontology format"),
+            "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn import_ontology_rejects_parse_errors() -> anyhow::Result<()> {
+        let (tmp, memory) = setup_memory().await?;
+        let ontology_path = tmp.path().join("broken.ttl");
+        tokio::fs::write(
+            &ontology_path,
+            "<http://zeroclaw.ai/schema#onto-a> <http://zeroclaw.ai/schema#relatesTo> .\n",
+        )
+        .await?;
+
+        let err = memory
+            .import_ontology(
+                ontology_path
+                    .to_str()
+                    .ok_or_else(|| anyhow::anyhow!("ontology path is not valid utf-8"))?,
+            )
+            .await
+            .expect_err("parse errors must fail");
+
+        assert!(
+            err.to_string().contains("ontology parsing failed"),
+            "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn import_ontology_rejects_oversized_files() -> anyhow::Result<()> {
+        let (tmp, memory) = setup_memory().await?;
+        let ontology_path = tmp.path().join("too-large.ttl");
+        let oversized = "#".repeat(5_242_881);
+        tokio::fs::write(&ontology_path, oversized).await?;
+
+        let err = memory
+            .import_ontology(
+                ontology_path
+                    .to_str()
+                    .ok_or_else(|| anyhow::anyhow!("ontology path is not valid utf-8"))?,
+            )
+            .await
+            .expect_err("oversized ontology must fail");
+
+        assert!(
+            err.to_string().contains("exceeds max allowed size"),
+            "unexpected error: {err}"
+        );
         Ok(())
     }
 }
