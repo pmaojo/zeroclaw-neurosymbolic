@@ -1,0 +1,4 @@
+@prefix ex: <http://example.com/> .
+
+ex:ZeroClaw ex:relatesTo ex:Synapse .
+ex:ZeroClaw ex:label "zeroclaw" .
