@@ -5524,6 +5524,7 @@ name = "synapse-core"
 version = "0.8.5"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bincode 1.3.3",
  "candle-core",
  "candle-nn",

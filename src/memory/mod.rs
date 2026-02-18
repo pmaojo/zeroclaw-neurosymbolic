@@ -30,7 +30,7 @@ pub use traits::Memory;
 #[allow(unused_imports)]
 pub use traits::{MemoryCategory, MemoryEntry};
 
-use crate::config::MemoryConfig;
+use crate::config::{MemoryConfig, SynapseSourcePolicyConfig};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -39,6 +39,7 @@ fn create_memory_with_sqlite_builder<F>(
     workspace_dir: &Path,
     mut sqlite_builder: F,
     unknown_context: &str,
+    synapse_policy: Option<SynapseSourcePolicyConfig>,
 ) -> anyhow::Result<Box<dyn Memory>>
 where
     F: FnMut() -> anyhow::Result<SqliteMemory>,
@@ -51,7 +52,8 @@ where
         }
         MemoryBackendKind::Synapse => {
             let local = sqlite_builder()?;
-            match SynapseMemory::new(workspace_dir, local, config.synapse_source_policy.clone()) {
+            let policy = synapse_policy.unwrap_or_default();
+            match SynapseMemory::new(workspace_dir, local, policy) {
                 Ok(memory) => Ok(Box::new(memory)),
                 Err(error) => {
                     tracing::warn!(
@@ -143,6 +145,7 @@ pub fn create_memory(
         workspace_dir,
         || build_sqlite_memory(config, workspace_dir, api_key),
         "",
+        Some(config.synapse_source_policy.clone()),
     )
 }
 
@@ -161,6 +164,7 @@ pub fn create_memory_for_migration(
         workspace_dir,
         || SqliteMemory::new(workspace_dir),
         " during migration",
+        None,
     )
 }
 
