@@ -83,7 +83,10 @@ impl SynapseStore {
         let vector_store = match VectorStore::new(namespace) {
             Ok(vs) => Some(Arc::new(vs)),
             Err(e) => {
-                eprintln!("WARNING: Failed to initialize vector store for namespace '{}': {}", namespace, e);
+                eprintln!(
+                    "WARNING: Failed to initialize vector store for namespace '{}': {}",
+                    namespace, e
+                );
                 None
             }
         };

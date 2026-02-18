@@ -10,4 +10,4 @@ pub mod synapse;
 mod tests;
 
 pub use agent::run;
-pub use synapse::{SwarmManager, Orchestrator};
+pub use synapse::{Orchestrator, SwarmManager};

@@ -43,7 +43,10 @@ impl EmbeddingModel {
     fn new() -> Result<Self> {
         let device = Device::Cpu;
         let api = Api::new()?;
-        let repo = api.repo(Repo::new("sentence-transformers/all-MiniLM-L6-v2".to_string(), RepoType::Model));
+        let repo = api.repo(Repo::new(
+            "sentence-transformers/all-MiniLM-L6-v2".to_string(),
+            RepoType::Model,
+        ));
 
         let config_filename = repo.get("config.json")?;
         let tokenizer_filename = repo.get("tokenizer.json")?;
@@ -53,7 +56,8 @@ impl EmbeddingModel {
         let config: Config = serde_json::from_str(&config)?;
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(anyhow::Error::msg)?;
 
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], DTYPE, &device)? };
+        let vb =
+            unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], DTYPE, &device)? };
         let model = BertModel::load(vb, &config)?;
 
         Ok(Self {
@@ -66,9 +70,13 @@ impl EmbeddingModel {
     fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         let mut embeddings = Vec::new();
         for text in texts {
-            let encoding = self.tokenizer.encode(text.as_str(), true).map_err(anyhow::Error::msg)?;
+            let encoding = self
+                .tokenizer
+                .encode(text.as_str(), true)
+                .map_err(anyhow::Error::msg)?;
             let input_ids = Tensor::new(encoding.get_ids(), &self.device)?.unsqueeze(0)?;
-            let token_type_ids = Tensor::new(encoding.get_type_ids(), &self.device)?.unsqueeze(0)?;
+            let token_type_ids =
+                Tensor::new(encoding.get_type_ids(), &self.device)?.unsqueeze(0)?;
 
             // Forward pass
             let output = self.model.forward(&input_ids, &token_type_ids, None)?;
@@ -130,7 +138,8 @@ impl VectorStore {
                         let id = i;
                         id_to_key.insert(id, entry.key.clone());
                         key_to_id.insert(entry.key.clone(), id);
-                        let metadata = serde_json::from_str(&entry.metadata_json).unwrap_or(serde_json::Value::Null);
+                        let metadata = serde_json::from_str(&entry.metadata_json)
+                            .unwrap_or(serde_json::Value::Null);
                         key_to_metadata.insert(entry.key.clone(), metadata);
                         embeddings.push(entry);
                     }
@@ -178,7 +187,7 @@ impl VectorStore {
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let embeddings = self.embed_batch(vec![text.to_string()]).await?;
         if embeddings.is_empty() {
-             anyhow::bail!("Failed to generate embedding");
+            anyhow::bail!("Failed to generate embedding");
         }
         Ok(embeddings[0].clone())
     }
@@ -188,9 +197,7 @@ impl VectorStore {
             return Ok(Vec::new());
         }
         let model = self.model.clone();
-        tokio::task::spawn_blocking(move || {
-            model.embed(&texts)
-        }).await?
+        tokio::task::spawn_blocking(move || model.embed(&texts)).await?
     }
 
     pub async fn add(
@@ -288,10 +295,14 @@ impl VectorStore {
         }
 
         // Linear Search: Cosine Similarity
-        let mut scores: Vec<(usize, f32)> = embeddings.iter().enumerate().map(|(id, entry)| {
-            let sim = cosine_similarity(&query_embedding, &entry.embedding);
-            (id, sim)
-        }).collect();
+        let mut scores: Vec<(usize, f32)> = embeddings
+            .iter()
+            .enumerate()
+            .map(|(id, entry)| {
+                let sim = cosine_similarity(&query_embedding, &entry.embedding);
+                (id, sim)
+            })
+            .collect();
 
         // Sort by score descending
         scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));

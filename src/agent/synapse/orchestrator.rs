@@ -1,9 +1,9 @@
-use anyhow::Result;
-use serde_json::Value;
+#[cfg(feature = "memory-synapse")]
+use crate::memory::synapse::ontology::{classes, namespaces, properties, task_status};
 #[cfg(feature = "memory-synapse")]
 use crate::memory::SynapseMemory;
-#[cfg(feature = "memory-synapse")]
-use crate::memory::synapse::ontology::{classes, properties, namespaces, task_status};
+use anyhow::Result;
+use serde_json::Value;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 use tracing::{info, warn};
@@ -23,7 +23,9 @@ impl Orchestrator {
 
     #[cfg(not(feature = "memory-synapse"))]
     pub fn new() -> Self {
-        Self { _marker: std::marker::PhantomData }
+        Self {
+            _marker: std::marker::PhantomData,
+        }
     }
 
     /// Run the main orchestration loop
@@ -121,7 +123,11 @@ impl Orchestrator {
 
     #[cfg(feature = "memory-synapse")]
     async fn assign_task(&self, task_uri: &str, agent_uri: &str) -> Result<()> {
-        let triple = (task_uri.to_string(), properties::ASSIGNED_TO.to_string(), agent_uri.to_string());
+        let triple = (
+            task_uri.to_string(),
+            properties::ASSIGNED_TO.to_string(),
+            agent_uri.to_string(),
+        );
         self.memory.ingest_triples(vec![triple]).await?;
         Ok(())
     }
