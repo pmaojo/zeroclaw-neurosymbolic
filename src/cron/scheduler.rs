@@ -94,32 +94,27 @@ async fn run_agent_job(config: &Config, job: &CronJob) -> (bool, String) {
     let name = job.name.clone().unwrap_or_else(|| "cron-job".to_string());
     let prompt = job.prompt.clone().unwrap_or_default();
     let prefixed_prompt = format!("[cron:{} {name}] {prompt}", job.id);
-    let model_override = job.model.clone();
 
-    let run_result = match job.session_target {
-        SessionTarget::Main | SessionTarget::Isolated => {
-            crate::agent::run(
-                config.clone(),
-                Some(prefixed_prompt),
-                None,
-                model_override,
-                config.default_temperature,
-                vec![],
-            )
-            .await
-        }
-    };
+    let mut effective_config = config.clone();
+    if let Some(m) = &job.model {
+        effective_config.default_model = Some(m.clone());
+    }
 
-    match run_result {
-        Ok(response) => (
-            true,
-            if response.trim().is_empty() {
-                "agent job executed".to_string()
-            } else {
-                response
-            },
-        ),
-        Err(e) => (false, format!("agent job failed: {e}")),
+    match crate::agent::agent::Agent::from_config(&effective_config) {
+        Ok(mut agent) => {
+            match agent.run_single(&prefixed_prompt).await {
+                Ok(response) => (
+                    true,
+                    if response.trim().is_empty() {
+                        "agent job executed".to_string()
+                    } else {
+                        response
+                    },
+                ),
+                Err(e) => (false, format!("agent job failed: {e}")),
+            }
+        },
+        Err(e) => (false, format!("failed to initialize agent: {e}")),
     }
 }
 

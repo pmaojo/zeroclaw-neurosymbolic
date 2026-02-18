@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/synapse-engine"]
+members = [".", "crates/synapse-core"]
 resolver = "2"
 
 [package]
@@ -125,8 +125,9 @@ probe-rs = { version = "0.30", optional = true }
 # PDF extraction for datasheet RAG (optional, enable with --features rag-pdf)
 pdf-extract = { version = "0.10", optional = true }
 
-# Synapse memory engine integration (optional, enable with --features memory-synapse)
-synapse-engine = { path = "crates/synapse-engine", optional = true }
+# Synapse Core (Memory)
+synapse-core = { path = "crates/synapse-core", optional = true, default-features = false }
+oxigraph = { version = "0.3", optional = true } # Must match synapse-core
 
 # Raspberry Pi GPIO / Landlock (Linux only) — target-specific to avoid compile failure on macOS
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -151,7 +152,7 @@ probe = ["dep:probe-rs"]
 # rag-pdf = PDF ingestion for datasheet RAG
 rag-pdf = ["dep:pdf-extract"]
 # memory-synapse = Synapse memory backend integration
-memory-synapse = ["dep:synapse-engine"]
+memory-synapse = ["dep:synapse-core", "dep:oxigraph"]
 [profile.release]
 opt-level = "z"      # Optimize for size
 lto = "thin"         # Lower memory use during release builds
