@@ -135,7 +135,7 @@ rppal = { version = "0.22", optional = true }
 landlock = { version = "0.4", optional = true }
 
 [features]
-default = ["hardware"]
+default = ["hardware", "memory-synapse"]
 hardware = ["nusb", "tokio-serial"]
 peripheral-rpi = ["rppal"]
 # Browser backend feature alias used by cfg(feature = "browser-native")

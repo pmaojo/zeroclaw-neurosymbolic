@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
+use async_trait::async_trait;
 
 // Candle imports
 #[cfg(feature = "local-embeddings")]
@@ -31,6 +32,7 @@ struct VectorData {
     entries: Vec<VectorEntry>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
     pub key: String,
     pub score: f32,
@@ -38,7 +40,28 @@ pub struct SearchResult {
     pub uri: String,
 }
 
-#[async_trait::async_trait]
+#[async_trait]
+pub trait VectorStore: Send + Sync {
+    async fn add(
+        &self,
+        key: &str,
+        content: &str,
+        metadata: serde_json::Value,
+    ) -> Result<usize>;
+
+    async fn add_batch(
+        &self,
+        items: Vec<(String, String, serde_json::Value)>,
+    ) -> Result<Vec<usize>>;
+
+    async fn search(&self, query: &str, k: usize) -> Result<Vec<SearchResult>>;
+
+    fn get_id(&self, key: &str) -> Option<usize>;
+
+    fn flush(&self) -> Result<()>;
+}
+
+#[async_trait]
 trait Embedder: Send + Sync {
     async fn embed(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>>;
 }
@@ -81,30 +104,9 @@ impl LocalEmbedder {
 }
 
 #[cfg(feature = "local-embeddings")]
-#[async_trait::async_trait]
+#[async_trait]
 impl Embedder for LocalEmbedder {
     async fn embed(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
-        // Since Candle is sync/blocking for now (CPU), we wrap in spawn_blocking in VectorStore usually,
-        // but here we can't easily move self because of async_trait?
-        // Actually, we can just do it synchronously here? No, async_trait expects async.
-        // We will need to wrap the compute in block_in_place or similar if we were running in tokio,
-        // but since we are refactoring, let's keep it simple.
-        // The original code used spawn_blocking from the caller.
-
-        // WARNING: Running heavy CPU compute in async function can block the runtime.
-        // Ideally this should be offloaded.
-        // But to avoid complex borrowing issues with moving `self` (which contains the model) into a thread,
-        // we might just run it here.
-        //
-        // However, the original code cloned the Arc<EmbeddingModel>.
-        // Here we are inside &self.
-        // Since we can't clone &self easily into a 'static task unless we use Arc on the struct itself.
-        // Let's assume for now we just run it. The caller `VectorStore` holds `Arc<dyn Embedder>`.
-        // So we can clone that Arc! But the trait method takes &self.
-        // We can't clone `self` from `&self`.
-
-        // Simpler approach: Just run it. It's a refactor. Optimize later if needed.
-
         let mut embeddings = Vec::new();
         for text in texts {
             let encoding = self
@@ -155,7 +157,7 @@ impl RemoteEmbedder {
 }
 
 #[cfg(feature = "remote-embeddings")]
-#[async_trait::async_trait]
+#[async_trait]
 impl Embedder for RemoteEmbedder {
     async fn embed(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
         let response = self.client.post(&self.api_url)
@@ -179,7 +181,7 @@ impl Embedder for RemoteEmbedder {
 struct NoOpEmbedder;
 
 #[cfg(not(any(feature = "local-embeddings", feature = "remote-embeddings")))]
-#[async_trait::async_trait]
+#[async_trait]
 impl Embedder for NoOpEmbedder {
     async fn embed(&self, _texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
         anyhow::bail!("No embedding feature enabled (local-embeddings or remote-embeddings)")
@@ -187,7 +189,7 @@ impl Embedder for NoOpEmbedder {
 }
 
 
-pub struct VectorStore {
+pub struct SimpleVectorStore {
     // Linear store for robust compilation
     id_to_key: Arc<RwLock<HashMap<usize, String>>>,
     key_to_id: Arc<RwLock<HashMap<String, usize>>>,
@@ -203,18 +205,11 @@ pub struct VectorStore {
     auto_save_threshold: usize,
 }
 
-impl VectorStore {
+impl SimpleVectorStore {
     pub fn new(namespace: &str) -> Result<Self> {
-        // Initialize embedder based on features
-        // Priority: Remote (if enabled via env/flag preference? No, usually explicit feature)
-        // If both enabled, let's prefer Local unless configured otherwise?
-        // Actually, to make compilation easy, user will likely enable only one.
-        // But if both are present, let's look for env var.
-
         let embedder: Arc<dyn Embedder> = {
             #[cfg(feature = "remote-embeddings")]
             {
-                // If remote is enabled, try it first if HF_TOKEN is present, or if local is disabled.
                 if std::env::var("HF_TOKEN").is_ok() {
                      Arc::new(RemoteEmbedder::new()?)
                 } else {
@@ -300,10 +295,6 @@ impl VectorStore {
         Ok(())
     }
 
-    pub fn flush(&self) -> Result<()> {
-        self.save_vectors()
-    }
-
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let embeddings = self.embed_batch(vec![text.to_string()]).await?;
         if embeddings.is_empty() {
@@ -316,26 +307,17 @@ impl VectorStore {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
-
-        // Use the abstracted embedder
-        // If it's local (blocking), we might want to wrap it in spawn_blocking if we want to be nice to async runtime.
-        // But since we abstracted it behind async trait, let's assume implementation handles it or we accept blocking for now.
-        // Actually, for LocalEmbedder I removed the spawn_blocking wrapper inside the trait implementation
-        // because I couldn't easily clone the model into the closure.
-        // To restore behavior, we should wrap the call here IF we know it's blocking.
-        // But we don't know concrete type here.
-
-        // Correction: In the original code, `model.embed` was blocking, and it was wrapped here.
-        // Now `embedder.embed` is async.
-        // For RemoteEmbedder, it is truly async (reqwest).
-        // For LocalEmbedder, I made it async but it blocks thread.
-        // To fix this properly, LocalEmbedder should use `tokio::task::block_in_place` or `spawn_blocking` internally if possible.
-        // Or we just accept it blocks the thread for this refactor.
-
         self.embedder.embed(texts).await
     }
+}
 
-    pub async fn add(
+#[async_trait]
+impl VectorStore for SimpleVectorStore {
+    fn flush(&self) -> Result<()> {
+        self.save_vectors()
+    }
+
+    async fn add(
         &self,
         key: &str,
         content: &str,
@@ -347,7 +329,7 @@ impl VectorStore {
         Ok(results[0])
     }
 
-    pub async fn add_batch(
+    async fn add_batch(
         &self,
         items: Vec<(String, String, serde_json::Value)>,
     ) -> Result<Vec<usize>> {
@@ -421,7 +403,7 @@ impl VectorStore {
         Ok(result_ids)
     }
 
-    pub async fn search(&self, query: &str, k: usize) -> Result<Vec<SearchResult>> {
+    async fn search(&self, query: &str, k: usize) -> Result<Vec<SearchResult>> {
         let query_embedding = self.embed(query).await?;
 
         let embeddings = self.embeddings.read().unwrap();
@@ -474,7 +456,7 @@ impl VectorStore {
         Ok(results)
     }
 
-    pub fn get_id(&self, key: &str) -> Option<usize> {
+    fn get_id(&self, key: &str) -> Option<usize> {
         self.key_to_id.read().unwrap().get(key).copied()
     }
 }
