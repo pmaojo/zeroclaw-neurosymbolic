@@ -1,6 +1,6 @@
 use crate::approval::{ApprovalManager, ApprovalRequest, ApprovalResponse};
 use crate::config::Config;
-use crate::memory::{self, Memory, MemoryCategory};
+use crate::memory::{self, GraphMemory, Memory, MemoryCategory};
 use crate::observability::{self, Observer, ObserverEvent};
 use crate::providers::{self, ChatMessage, Provider, ToolCall};
 use crate::runtime;
@@ -10,6 +10,7 @@ use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
 use regex::{Regex, RegexSet};
 use std::fmt::Write;
+use super::synapse_parsing::{parse_memory_ops, MemoryOpType};
 use std::io::Write as _;
 use std::sync::{Arc, LazyLock};
 use std::time::Instant;
@@ -201,7 +202,19 @@ async fn auto_compact_history(
 async fn build_context(mem: &dyn Memory, user_msg: &str) -> String {
     let mut context = String::new();
 
-    // Pull relevant memories for this message
+    // If memory is graph-capable (Synapse), fetch active context first
+    #[cfg(feature = "memory-synapse")]
+    if mem.name() == "synapse" {
+        if let Ok(graph_ctx) = fetch_graph_context(mem).await {
+            if !graph_ctx.is_empty() {
+                context.push_str("[Active Graph Context]\n");
+                context.push_str(&graph_ctx);
+                context.push('\n');
+            }
+        }
+    }
+
+    // Pull relevant memories for this message (Hybrid/Vector recall)
     if let Ok(entries) = mem.recall(user_msg, 5, None).await {
         if !entries.is_empty() {
             context.push_str("[Memory context]\n");
@@ -213,6 +226,58 @@ async fn build_context(mem: &dyn Memory, user_msg: &str) -> String {
     }
 
     context
+}
+
+#[cfg(feature = "memory-synapse")]
+async fn fetch_graph_context(mem: &dyn Memory) -> Result<String> {
+    // 1. Fetch User Profile
+    let user_profile_query = r#"
+        SELECT ?p ?o WHERE {
+            ?s <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://zeroclaw.ai/schema#UserProfile> .
+            ?s ?p ?o .
+        }
+    "#;
+
+    // 2. Fetch Active Project Status
+    let project_status_query = r#"
+        SELECT ?s ?status WHERE {
+            ?s <http://zeroclaw.ai/schema#status> ?status .
+            FILTER(?status = "Active")
+        }
+    "#;
+
+    // Execute queries (best effort)
+    let mut context_lines = Vec::new();
+
+    if let Ok(json) = mem.query_sparql(user_profile_query).await {
+        if let Ok(rows) = serde_json::from_str::<Vec<serde_json::Value>>(&json) {
+            for row in rows {
+                let p_val = row.get("p").or_else(|| row.get("?p")).and_then(|v| v.as_str());
+                let o_val = row.get("o").or_else(|| row.get("?o")).and_then(|v| v.as_str());
+
+                if let (Some(p), Some(o)) = (p_val, o_val) {
+                    let p_clean = p.split('#').last().unwrap_or(p).trim_end_matches('>');
+                    context_lines.push(format!("User {}: {}", p_clean, o));
+                }
+            }
+        }
+    }
+
+    if let Ok(json) = mem.query_sparql(project_status_query).await {
+        if let Ok(rows) = serde_json::from_str::<Vec<serde_json::Value>>(&json) {
+            for row in rows {
+                let s_val = row.get("s").or_else(|| row.get("?s")).and_then(|v| v.as_str());
+                let st_val = row.get("status").or_else(|| row.get("?status")).and_then(|v| v.as_str());
+
+                if let (Some(s), Some(st)) = (s_val, st_val) {
+                    let s_clean = s.split('/').last().unwrap_or(s).trim_end_matches('>');
+                    context_lines.push(format!("Project {}: {}", s_clean, st));
+                }
+            }
+        }
+    }
+
+    Ok(context_lines.join("\n"))
 }
 
 /// Build hardware datasheet context from RAG when peripherals are enabled.
@@ -540,6 +605,7 @@ pub(crate) async fn agent_turn(
         silent,
         None,
         "channel",
+        None,
     )
     .await
 }
@@ -558,6 +624,7 @@ pub(crate) async fn run_tool_call_loop(
     silent: bool,
     approval: Option<&ApprovalManager>,
     channel_name: &str,
+    mem: Option<&dyn Memory>,
 ) -> Result<String> {
     // Build native tool definitions once if the provider supports them.
     let use_native_tools = provider.supports_native_tools() && !tools_registry.is_empty();
@@ -676,6 +743,48 @@ pub(crate) async fn run_tool_call_loop(
         if !silent && !display_text.is_empty() {
             print!("{display_text}");
             let _ = std::io::stdout().flush();
+        }
+
+        // ── Active Tagging: Process Memory Ops ───────────────────
+        if let Some(memory) = mem {
+            let memory_ops = parse_memory_ops(&response_text);
+            for op in memory_ops {
+                match op.op_type {
+                    MemoryOpType::Upsert => {
+                        let triples: Vec<(String, String, String)> = op
+                            .facts
+                            .into_iter()
+                            .map(|f| (f.subject, f.predicate, f.object))
+                            .collect();
+                        if !triples.is_empty() {
+                            tracing::info!(count = triples.len(), "🧠 Processing active memory upsert");
+                            if let Err(e) = memory.ingest_triples(triples).await {
+                                tracing::error!("Failed to ingest active memory triples: {}", e);
+                            }
+                        }
+                    }
+                    MemoryOpType::Delete => {
+                        let triples: Vec<String> = op
+                            .facts
+                            .into_iter()
+                            .map(|f| format!("<{}> <{}> <{}> .", f.subject, f.predicate, f.object))
+                            .collect();
+
+                        if !triples.is_empty() {
+                            let delete_query = format!("DELETE DATA {{ {} }}", triples.join("\n"));
+                            tracing::info!("🧠 Processing active memory delete");
+                            if let Err(e) = memory.query_sparql(&delete_query).await {
+                                tracing::error!("Failed to execute active memory delete: {}", e);
+                            }
+                        }
+                    }
+                    MemoryOpType::Query => {
+                        // Query for side-effects? Usually queries happen via tool use.
+                        // We log it for now.
+                        tracing::info!("Active memory query observed: {:?}", op.query);
+                    }
+                }
+            }
         }
 
         // Execute each tool call and build results
@@ -849,6 +958,15 @@ pub async fn run(
     if !peripheral_tools.is_empty() {
         tracing::info!(count = peripheral_tools.len(), "Peripheral tools added");
         tools_registry.extend(peripheral_tools);
+    }
+
+    // ── Tools Graph Registration ─────────────────────────────────
+    // Register tools as nodes in the graph for semantic reasoning
+    #[cfg(feature = "memory-synapse")]
+    if config.memory.backend == "synapse" {
+        if let Err(e) = super::tools_graph::register_tools_as_nodes(&tools_registry, mem.as_ref()).await {
+            tracing::warn!("Failed to register tools in graph: {}", e);
+        }
     }
 
     // ── Resolve provider ─────────────────────────────────────────
@@ -1066,6 +1184,7 @@ pub async fn run(
             false,
             Some(&approval_manager),
             "cli",
+            Some(mem.as_ref()),
         )
         .await?;
         final_output = response.clone();
@@ -1145,6 +1264,7 @@ pub async fn run(
                 false,
                 Some(&approval_manager),
                 "cli",
+                Some(mem.as_ref()),
             )
             .await
             {

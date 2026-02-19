@@ -6,7 +6,7 @@ mod synapse_tests {
     use zeroclaw::agent::synapse::{Orchestrator, SwarmManager};
     use zeroclaw::config::SynapseSourcePolicyConfig;
     use zeroclaw::memory::graph_traits::{
-        EdgeDirection, GraphMemory, NeighborhoodQuery, NodeId, RelationType,
+        EdgeDirection, NeighborhoodQuery, NodeId, RelationType,
     };
     use zeroclaw::memory::synapse::ontology::{classes, namespaces, properties};
     use zeroclaw::memory::{Memory, SqliteMemory, SynapseMemory};
@@ -36,7 +36,7 @@ mod synapse_tests {
             namespaces::ZEROCLAW,
             classes::AGENT
         );
-        let result = memory.query_sparql(&query)?;
+        let result = memory.query_sparql(&query).await?;
         assert!(result.contains("true"), "Agent node should exist");
 
         // 3. Create Task
@@ -50,7 +50,7 @@ mod synapse_tests {
             task_id,
             classes::TASK
         );
-        let result_task = memory.query_sparql(&query_task)?;
+        let result_task = memory.query_sparql(&query_task).await?;
         assert!(result_task.contains("true"), "Task node should exist");
 
         // 4. Run Orchestrator Cycle (Assign Task)
@@ -65,7 +65,7 @@ mod synapse_tests {
             classes::TASK,
             properties::ASSIGNED_TO
         );
-        let json = memory.query_sparql(&find_query)?;
+        let json = memory.query_sparql(&find_query).await?;
         assert!(json.contains(&task_id), "Task should be unassigned");
 
         // Assign it
@@ -86,7 +86,7 @@ mod synapse_tests {
             properties::ASSIGNED_TO,
             agent_uri
         );
-        let assigned = memory.query_sparql(&check_assign)?;
+        let assigned = memory.query_sparql(&check_assign).await?;
         assert!(assigned.contains("true"), "Task should be assigned");
 
         // 6. Test Vector Search path

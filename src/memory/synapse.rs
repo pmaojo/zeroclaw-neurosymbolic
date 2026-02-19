@@ -1,7 +1,8 @@
+#[cfg(feature = "memory-synapse")]
 pub mod ontology;
 
 use super::graph_traits::{
-    GraphEdge, GraphEdgeUpsert, GraphMemory, GraphNode, GraphNodeUpsert, GraphSearchResult,
+    GraphEdge, GraphEdgeUpsert, GraphNode, GraphNodeUpsert, GraphSearchResult,
     NeighborhoodQuery, NodeId, RelationType, SemanticGraphQuery, SynapseNodeType,
 };
 #[cfg(feature = "memory-synapse")]
@@ -137,7 +138,7 @@ impl SynapseMemory {
     }
 
     #[cfg(feature = "memory-synapse")]
-    pub async fn ingest_triples(
+    pub async fn ingest_triples_local(
         &self,
         triples: Vec<(String, String, String)>,
     ) -> anyhow::Result<()> {
@@ -147,11 +148,7 @@ impl SynapseMemory {
                 subject: s,
                 predicate: p,
                 object: o,
-                provenance: Some(Provenance {
-                    source: "zeroclaw".to_string(),
-                    timestamp: chrono::Utc::now().to_rfc3339(),
-                    method: "direct".to_string(),
-                }),
+                provenance: None,
             })
             .collect();
 
@@ -255,7 +252,7 @@ impl SynapseMemory {
 
     /// Execute a SPARQL query
     #[cfg(feature = "memory-synapse")]
-    pub fn query_sparql(&self, query: &str) -> anyhow::Result<String> {
+    pub fn query_sparql_local(&self, query: &str) -> anyhow::Result<String> {
         Ok(self.store.query_sparql(query)?)
     }
 
@@ -314,14 +311,17 @@ impl SynapseMemory {
     fn parse_graph_edge_binding(row: &Value) -> anyhow::Result<GraphEdge> {
         let source_uri = row
             .get("source")
+            .or_else(|| row.get("?source"))
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("missing 'source' binding in SPARQL row: {row}"))?;
         let predicate_uri = row
             .get("predicate")
+            .or_else(|| row.get("?predicate"))
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("missing 'predicate' binding in SPARQL row: {row}"))?;
         let target_uri = row
             .get("target")
+            .or_else(|| row.get("?target"))
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("missing 'target' binding in SPARQL row: {row}"))?;
 
@@ -374,11 +374,13 @@ impl SynapseMemory {
         for row in rows {
             let predicate = row
                 .get("predicate")
+                .or_else(|| row.get("?predicate"))
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow::anyhow!("missing predicate binding: {row}"))?
                 .trim_matches(['<', '>']);
             let object = row
                 .get("object")
+                .or_else(|| row.get("?object"))
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow::anyhow!("missing object binding: {row}"))?;
 
@@ -493,7 +495,7 @@ impl Memory for SynapseMemory {
                 ));
             }
 
-            self.ingest_triples(triples).await?;
+            self.ingest_triples_local(triples).await?;
             Ok(())
         }
         #[cfg(not(feature = "memory-synapse"))]
@@ -583,10 +585,7 @@ impl Memory for SynapseMemory {
         #[cfg(not(feature = "memory-synapse"))]
         false
     }
-}
 
-#[async_trait]
-impl GraphMemory for SynapseMemory {
     async fn upsert_node(&self, node: GraphNodeUpsert) -> anyhow::Result<()> {
         #[cfg(feature = "memory-synapse")]
         {
@@ -621,7 +620,7 @@ impl GraphMemory for SynapseMemory {
                 ));
             }
 
-            self.ingest_triples(triples).await?;
+            self.ingest_triples_local(triples).await?;
             Ok(())
         }
         #[cfg(not(feature = "memory-synapse"))]
@@ -636,7 +635,7 @@ impl GraphMemory for SynapseMemory {
 
             let predicate = Self::relation_to_predicate(&edge.relation);
 
-            self.ingest_triples(vec![(s_uri, predicate, o_uri)]).await?;
+            self.ingest_triples_local(vec![(s_uri, predicate, o_uri)]).await?;
             Ok(())
         }
         #[cfg(not(feature = "memory-synapse"))]
@@ -720,6 +719,31 @@ impl GraphMemory for SynapseMemory {
         }
         #[cfg(not(feature = "memory-synapse"))]
         Ok(Vec::new())
+    }
+
+    async fn ingest_triples(&self, triples: Vec<(String, String, String)>) -> anyhow::Result<()> {
+        #[cfg(feature = "memory-synapse")]
+        {
+            self.ingest_triples_local(triples).await?;
+            Ok(())
+        }
+        #[cfg(not(feature = "memory-synapse"))]
+        {
+            let _ = triples;
+            anyhow::bail!("Synapse memory feature not enabled")
+        }
+    }
+
+    async fn query_sparql(&self, query: &str) -> anyhow::Result<String> {
+        #[cfg(feature = "memory-synapse")]
+        {
+            self.query_sparql_local(query)
+        }
+        #[cfg(not(feature = "memory-synapse"))]
+        {
+            let _ = query;
+            anyhow::bail!("Synapse memory feature not enabled")
+        }
     }
 }
 
@@ -990,7 +1014,7 @@ mod tests {
             properties::RELATES_TO,
             namespaces::ZEROCLAW
         );
-        let result = memory.query_sparql(&ask_query)?;
+        let result = memory.query_sparql(&ask_query).await?;
         assert!(result.contains("true"));
 
         Ok(())

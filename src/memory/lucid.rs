@@ -1,3 +1,7 @@
+use super::graph_traits::{
+    GraphEdge, GraphEdgeUpsert, GraphMemory, GraphNodeUpsert, GraphSearchResult, NeighborhoodQuery,
+    SemanticGraphQuery,
+};
 use super::sqlite::SqliteMemory;
 use super::traits::{Memory, MemoryCategory, MemoryEntry};
 use async_trait::async_trait;
@@ -381,6 +385,28 @@ impl Memory for LucidMemory {
 
     async fn health_check(&self) -> bool {
         self.local.health_check().await
+    }
+}
+
+#[async_trait]
+impl GraphMemory for LucidMemory {
+    async fn upsert_node(&self, _node: GraphNodeUpsert) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn upsert_typed_edge(&self, _edge: GraphEdgeUpsert) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn query_by_neighborhood(
+        &self,
+        _query: NeighborhoodQuery,
+    ) -> anyhow::Result<Vec<GraphEdge>> {
+        Ok(Vec::new())
+    }
+    async fn semantic_search_with_filters(
+        &self,
+        _query: SemanticGraphQuery,
+    ) -> anyhow::Result<Vec<GraphSearchResult>> {
+        Ok(Vec::new())
     }
 }
 

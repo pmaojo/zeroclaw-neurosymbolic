@@ -1,3 +1,7 @@
+use super::graph_traits::{
+    GraphEdge, GraphEdgeUpsert, GraphNodeUpsert, GraphSearchResult, NeighborhoodQuery,
+    SemanticGraphQuery,
+};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -79,6 +83,38 @@ pub trait Memory: Send + Sync {
 
     /// Health check
     async fn health_check(&self) -> bool;
+
+    // ── Graph Capabilities (Optional) ─────────────────────────────
+
+    async fn upsert_node(&self, _node: GraphNodeUpsert) -> anyhow::Result<()> {
+        Ok(()) // Default no-op
+    }
+
+    async fn upsert_typed_edge(&self, _edge: GraphEdgeUpsert) -> anyhow::Result<()> {
+        Ok(()) // Default no-op
+    }
+
+    async fn query_by_neighborhood(
+        &self,
+        _query: NeighborhoodQuery,
+    ) -> anyhow::Result<Vec<GraphEdge>> {
+        Ok(Vec::new()) // Default empty
+    }
+
+    async fn semantic_search_with_filters(
+        &self,
+        _query: SemanticGraphQuery,
+    ) -> anyhow::Result<Vec<GraphSearchResult>> {
+        Ok(Vec::new()) // Default empty
+    }
+
+    async fn ingest_triples(&self, _triples: Vec<(String, String, String)>) -> anyhow::Result<()> {
+        anyhow::bail!("backend does not support raw triple ingestion")
+    }
+
+    async fn query_sparql(&self, _query: &str) -> anyhow::Result<String> {
+        anyhow::bail!("backend does not support SPARQL queries")
+    }
 }
 
 #[cfg(test)]

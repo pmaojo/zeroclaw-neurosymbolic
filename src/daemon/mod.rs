@@ -1,3 +1,5 @@
+pub mod dreaming;
+
 use crate::config::Config;
 use anyhow::Result;
 use chrono::Utc;
@@ -24,6 +26,29 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
     }
 
     let mut handles: Vec<JoinHandle<()>> = vec![spawn_state_writer(config.clone())];
+
+    // ── Dreaming Engine Supervisor ───────────────────────────────
+    // Always started if memory-synapse is enabled, acts as background garbage collector
+    #[cfg(feature = "memory-synapse")]
+    {
+        let dreaming_cfg = config.clone();
+        handles.push(spawn_component_supervisor(
+            "dreaming",
+            initial_backoff,
+            max_backoff,
+            move || {
+                let cfg = dreaming_cfg.clone();
+                async move {
+                    let mem = std::sync::Arc::from(crate::memory::create_memory(
+                        &cfg.memory,
+                        &cfg.workspace_dir,
+                        cfg.api_key.as_deref(),
+                    )?);
+                    crate::daemon::dreaming::DreamingEngine::new(mem).run().await
+                }
+            },
+        ));
+    }
 
     {
         let gateway_cfg = config.clone();
@@ -89,7 +114,7 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
 
     println!("🧠 ZeroClaw daemon started");
     println!("   Gateway:  http://{host}:{port}");
-    println!("   Components: gateway, channels, heartbeat, scheduler");
+    println!("   Components: gateway, channels, heartbeat, scheduler, dreaming");
     println!("   Ctrl+C to stop");
 
     tokio::signal::ctrl_c().await?;

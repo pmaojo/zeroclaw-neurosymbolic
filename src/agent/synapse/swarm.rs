@@ -2,6 +2,8 @@
 use crate::memory::synapse::ontology::{classes, namespaces, properties, task_status};
 #[cfg(feature = "memory-synapse")]
 use crate::memory::SynapseMemory;
+#[cfg(feature = "memory-synapse")]
+use crate::memory::Memory;
 use anyhow::Result;
 use serde_json::Value;
 use uuid::Uuid;
@@ -47,7 +49,7 @@ impl SwarmManager {
                 has_priority = properties::HAS_PRIORITY
             );
 
-            let json_result = self.memory.query_sparql(&query)?;
+            let json_result = self.memory.query_sparql(&query).await?;
             let parsed: Vec<Value> = serde_json::from_str(&json_result)?;
             Ok(parsed)
         }
@@ -161,17 +163,17 @@ impl SwarmManager {
                 has_tool = properties::HAS_TOOL
             );
 
-            let json_result = self.memory.query_sparql(&query)?;
+            let json_result = self.memory.query_sparql(&query).await?;
             let results: Vec<Value> = serde_json::from_str(&json_result)?;
 
             let mut role = "Assistant".to_string();
             let mut tools = Vec::new();
 
             for row in results {
-                if let Some(r) = row.get("role").and_then(|v| v.as_str()) {
+                if let Some(r) = row.get("role").or_else(|| row.get("?role")).and_then(|v| v.as_str()) {
                     role = r.to_string();
                 }
-                if let Some(t) = row.get("tool").and_then(|v| v.as_str()) {
+                if let Some(t) = row.get("tool").or_else(|| row.get("?tool")).and_then(|v| v.as_str()) {
                     tools.push(t.replace(namespaces::ZEROCLAW, "").replace("Tool/", ""));
                 }
             }

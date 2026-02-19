@@ -232,16 +232,24 @@ impl SynapseStore {
             for (s, p, o) in batch_triples {
                 let subject_uri = self.ensure_uri(&s);
                 let predicate_uri = self.ensure_uri(&p);
-                let object_uri = self.ensure_uri(&o);
 
                 // Register URIs in the ID mapping (for gRPC compatibility)
                 self.get_or_create_id(&subject_uri);
                 self.get_or_create_id(&predicate_uri);
-                self.get_or_create_id(&object_uri);
 
                 let subject = Subject::NamedNode(NamedNode::new_unchecked(&subject_uri));
                 let predicate = NamedNode::new_unchecked(&predicate_uri);
-                let object = Term::NamedNode(NamedNode::new_unchecked(&object_uri));
+
+                let (object, object_key_str) = if o.starts_with('"') {
+                    // It's a literal
+                    let value = o.trim_matches('"');
+                    // TODO: Support language tags or types if needed
+                    (Term::Literal(Literal::new_simple_literal(value)), value.to_string())
+                } else {
+                    let object_uri = self.ensure_uri(&o);
+                    self.get_or_create_id(&object_uri);
+                    (Term::NamedNode(NamedNode::new_unchecked(&object_uri)), object_uri)
+                };
 
                 let quad = Quad::new(subject, predicate, object, graph_name.clone());
                 let inserted = self.store.insert(&quad)?;
@@ -249,7 +257,7 @@ impl SynapseStore {
                 // Also index in vector store if available
                 if let Some(ref vs) = self.vector_store {
                     // We check if it's already in the vector store by key
-                    let key = format!("{}|{}|{}", subject_uri, predicate_uri, object_uri);
+                    let key = format!("{}|{}|{}", subject_uri, predicate_uri, object_key_str);
                     if vs.get_id(&key).is_none() {
                         // Create searchable content from triple
                         let content = format!("{} {} {}", s, p, o);
@@ -257,7 +265,7 @@ impl SynapseStore {
                         let metadata = serde_json::json!({
                             "uri": subject_uri,
                             "predicate": predicate_uri,
-                            "object": object_uri,
+                            "object": object_key_str,
                             "type": "triple"
                         });
 
