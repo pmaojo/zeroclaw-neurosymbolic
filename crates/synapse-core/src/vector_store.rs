@@ -56,18 +56,18 @@ pub trait VectorStore: Send + Sync {
 
     async fn search(&self, query: &str, k: usize) -> Result<Vec<SearchResult>>;
 
-    fn get_id(&self, key: &str) -> Option<usize>;
+    async fn get_id(&self, key: &str) -> Result<Option<usize>>;
 
     fn flush(&self) -> Result<()>;
 }
 
 #[async_trait]
-trait Embedder: Send + Sync {
+pub trait Embedder: Send + Sync {
     async fn embed(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>>;
 }
 
 #[cfg(feature = "local-embeddings")]
-struct LocalEmbedder {
+pub struct LocalEmbedder {
     model: BertModel,
     tokenizer: Tokenizer,
     device: Device,
@@ -75,7 +75,7 @@ struct LocalEmbedder {
 
 #[cfg(feature = "local-embeddings")]
 impl LocalEmbedder {
-    fn new() -> Result<Self> {
+    pub fn new() -> Result<Self> {
         let device = Device::Cpu;
         let api = Api::new()?;
         let repo = api.repo(Repo::new(
@@ -138,7 +138,7 @@ impl Embedder for LocalEmbedder {
 }
 
 #[cfg(feature = "remote-embeddings")]
-struct RemoteEmbedder {
+pub struct RemoteEmbedder {
     client: reqwest::Client,
     api_url: String,
     token: String,
@@ -146,7 +146,7 @@ struct RemoteEmbedder {
 
 #[cfg(feature = "remote-embeddings")]
 impl RemoteEmbedder {
-    fn new() -> Result<Self> {
+    pub fn new() -> Result<Self> {
         let token = std::env::var("HF_TOKEN").context("HF_TOKEN environment variable required for remote embeddings")?;
         Ok(Self {
             client: reqwest::Client::new(),
@@ -178,7 +178,7 @@ impl Embedder for RemoteEmbedder {
 
 // Dummy embedder when no feature is enabled
 #[cfg(not(any(feature = "local-embeddings", feature = "remote-embeddings")))]
-struct NoOpEmbedder;
+pub struct NoOpEmbedder;
 
 #[cfg(not(any(feature = "local-embeddings", feature = "remote-embeddings")))]
 #[async_trait]
@@ -207,28 +207,7 @@ pub struct SimpleVectorStore {
 
 impl SimpleVectorStore {
     pub fn new(namespace: &str) -> Result<Self> {
-        let embedder: Arc<dyn Embedder> = {
-            #[cfg(feature = "remote-embeddings")]
-            {
-                if std::env::var("HF_TOKEN").is_ok() {
-                     Arc::new(RemoteEmbedder::new()?)
-                } else {
-                     #[cfg(feature = "local-embeddings")]
-                     { Arc::new(LocalEmbedder::new()?) }
-                     #[cfg(not(feature = "local-embeddings"))]
-                     { anyhow::bail!("HF_TOKEN not set and local-embeddings disabled") }
-                }
-            }
-            #[cfg(all(not(feature = "remote-embeddings"), feature = "local-embeddings"))]
-            {
-                Arc::new(LocalEmbedder::new().context("Failed to load Candle embedding model")?)
-            }
-             #[cfg(not(any(feature = "local-embeddings", feature = "remote-embeddings")))]
-            {
-                Arc::new(NoOpEmbedder)
-            }
-        };
-
+        let embedder = create_default_embedder()?;
         let dimensions = 384;
 
         let mut storage_path = None;
@@ -456,8 +435,30 @@ impl VectorStore for SimpleVectorStore {
         Ok(results)
     }
 
-    fn get_id(&self, key: &str) -> Option<usize> {
-        self.key_to_id.read().unwrap().get(key).copied()
+    async fn get_id(&self, key: &str) -> Result<Option<usize>> {
+        Ok(self.key_to_id.read().unwrap().get(key).copied())
+    }
+}
+
+pub fn create_default_embedder() -> Result<Arc<dyn Embedder>> {
+    #[cfg(feature = "remote-embeddings")]
+    {
+        if std::env::var("HF_TOKEN").is_ok() {
+             return Ok(Arc::new(RemoteEmbedder::new()?));
+        } else {
+             #[cfg(feature = "local-embeddings")]
+             { return Ok(Arc::new(LocalEmbedder::new()?)); }
+             #[cfg(not(feature = "local-embeddings"))]
+             { anyhow::bail!("HF_TOKEN not set and local-embeddings disabled") }
+        }
+    }
+    #[cfg(all(not(feature = "remote-embeddings"), feature = "local-embeddings"))]
+    {
+        Ok(Arc::new(LocalEmbedder::new().context("Failed to load Candle embedding model")?))
+    }
+     #[cfg(not(any(feature = "local-embeddings", feature = "remote-embeddings")))]
+    {
+        Ok(Arc::new(NoOpEmbedder))
     }
 }
 

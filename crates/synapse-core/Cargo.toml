@@ -53,6 +53,12 @@ candle-transformers = { version = "0.8", optional = true }
 tokenizers = { version = "0.20", optional = true }
 hf-hub = { version = "0.4", optional = true }
 
+# Lance integration
+lance = { version = "2.0", optional = true }
+arrow-array = { version = "57.0", optional = true }
+arrow-schema = { version = "57.0", optional = true }
+arrow-cast = { version = "57.0", optional = true }
+
 [build-dependencies]
 tonic-build = "0.11"
 
@@ -60,6 +66,7 @@ tonic-build = "0.11"
 default = ["local-embeddings"]
 local-embeddings = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers", "dep:hf-hub"]
 remote-embeddings = []
+lance-storage = ["dep:lance", "dep:arrow-array", "dep:arrow-schema", "dep:arrow-cast"]
 
 [dev-dependencies]
 tempfile = "3.10"
