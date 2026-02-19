@@ -734,9 +734,21 @@ impl SemanticEngine for MySemanticEngine {
         let vector_k = req.vector_k as usize;
         let graph_depth = req.graph_depth;
 
+        let decay = if req.decay_factor > 0.0 {
+            req.decay_factor
+        } else {
+            0.8 // Default decay
+        };
+
         let results = match SearchMode::try_from(req.mode) {
             Ok(SearchMode::VectorOnly) | Ok(SearchMode::Hybrid) => store
-                .hybrid_search(&req.query, vector_k, graph_depth)
+                .hybrid_search(
+                    &req.query,
+                    vector_k,
+                    graph_depth,
+                    req.spreading_activation,
+                    decay,
+                )
                 .await
                 .map_err(|e| Status::internal(format!("Hybrid search failed: {}", e)))?,
             _ => vec![],
@@ -756,6 +768,101 @@ impl SemanticEngine for MySemanticEngine {
         Ok(Response::new(SearchResponse {
             results: grpc_results,
         }))
+    }
+
+    async fn consolidate_memory(
+        &self,
+        request: Request<ConsolidateRequest>,
+    ) -> Result<Response<ConsolidateResponse>, Status> {
+        let token = get_token(&request);
+        let req = request.into_inner();
+        let namespace = if req.namespace.is_empty() {
+            "default"
+        } else {
+            &req.namespace
+        };
+
+        if let Err(e) = self.auth.check(token.as_deref(), namespace, "read") {
+            return Err(Status::permission_denied(e));
+        }
+
+        let store = self.get_store(namespace)?;
+
+        // Find all episodes
+        let episode_type = crate::episodic::EpisodicMemory::TYPE_EPISODE;
+        let mut episodes = Vec::new();
+
+        if let Ok(type_node) = oxigraph::model::NamedNode::new(episode_type) {
+            let rdf_type = oxigraph::model::NamedNode::new(
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+            )
+            .unwrap();
+
+            for q in store
+                .store
+                .quads_for_pattern(None, Some(rdf_type.as_ref()), Some(type_node.as_ref().into()), None)
+                .flatten()
+            {
+                if let oxigraph::model::Subject::NamedNode(node) = q.subject {
+                    let uri = node.as_str().to_string();
+                    let activation = store.get_activation(&uri);
+
+                    if activation >= req.activation_threshold {
+                        // Retrieve content and timestamp
+                        let mut content = String::new();
+                        let mut timestamp = String::new();
+
+                        if let Ok(content_pred) = oxigraph::model::NamedNode::new(
+                            crate::episodic::EpisodicMemory::PRED_CONTENT,
+                        ) {
+                            if let Some(cq) = store
+                                .store
+                                .quads_for_pattern(Some(node.as_ref().into()), Some(content_pred.as_ref()), None, None)
+                                .flatten()
+                                .next()
+                            {
+                                if let oxigraph::model::Term::Literal(l) = cq.object {
+                                    content = l.value().to_string();
+                                }
+                            }
+                        }
+
+                         if let Ok(ts_pred) = oxigraph::model::NamedNode::new(
+                            crate::episodic::EpisodicMemory::PRED_TIMESTAMP,
+                        ) {
+                            if let Some(cq) = store
+                                .store
+                                .quads_for_pattern(Some(node.as_ref().into()), Some(ts_pred.as_ref()), None, None)
+                                .flatten()
+                                .next()
+                            {
+                                if let oxigraph::model::Term::Literal(l) = cq.object {
+                                    timestamp = l.value().to_string();
+                                }
+                            }
+                        }
+
+                        episodes.push(Episode {
+                            uri,
+                            content,
+                            timestamp,
+                            activation,
+                            related_entities: vec![], // Populate if needed
+                        });
+                    }
+                }
+            }
+        }
+
+        // Sort by activation desc
+        episodes.sort_by(|a, b| b.activation.partial_cmp(&a.activation).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Limit
+        if req.limit > 0 {
+            episodes.truncate(req.limit as usize);
+        }
+
+        Ok(Response::new(ConsolidateResponse { episodes }))
     }
 
     async fn apply_reasoning(

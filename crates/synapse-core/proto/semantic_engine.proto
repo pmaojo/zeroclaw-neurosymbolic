@@ -31,6 +31,9 @@ service SemanticEngine {
 
     // Applies automated reasoning to a namespace
     rpc ApplyReasoning (ReasoningRequest) returns (ReasoningResponse);
+
+    // Identifies important memories for consolidation/abstraction
+    rpc ConsolidateMemory (ConsolidateRequest) returns (ConsolidateResponse);
 }
 
 message SparqlRequest {
@@ -130,6 +133,9 @@ message HybridSearchRequest {
     uint32 graph_depth = 4;   // Graph expansion depth (0 = no expansion)
     SearchMode mode = 5;      // Search strategy
     uint32 limit = 6;         // Final result limit
+    bool spreading_activation = 7; // Use activation flow instead of BFS
+    float decay_factor = 8;   // Activation decay per hop (0.0 - 1.0, default 0.8)
+    float time_weight = 9;    // Importance of recency (0.0 - 1.0, default 0.5)
 }
 
 message ResolveRequest {
@@ -166,4 +172,22 @@ message ReasoningResponse {
     bool success = 1;
     uint32 triples_inferred = 2;
     string message = 3;
+}
+
+message ConsolidateRequest {
+    string namespace = 1;
+    float activation_threshold = 2; // Min activation to consider important
+    uint32 limit = 3;               // Max episodes to return
+}
+
+message ConsolidateResponse {
+    repeated Episode episodes = 1;
+}
+
+message Episode {
+    string uri = 1;
+    string content = 2;
+    string timestamp = 3;
+    float activation = 4;
+    repeated string related_entities = 5;
 }

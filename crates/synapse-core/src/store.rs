@@ -1,10 +1,12 @@
+use crate::episodic::EpisodicMemory;
 use crate::persistence::{load_bincode, save_bincode};
 use crate::vector_store::VectorStore;
 use anyhow::Result;
+use chrono::Utc;
 use oxigraph::model::*;
 use oxigraph::store::Store;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
@@ -286,12 +288,240 @@ impl SynapseStore {
         Ok((added, 0))
     }
 
-    /// Hybrid search: vector similarity + graph expansion
+    /// Update access statistics for a memory (URI)
+    /// This enables the "human-like" forgetting and reinforcement mechanism.
+    pub fn update_access_stats(&self, uri: &str) -> Result<()> {
+        let node = NamedNode::new(uri)?;
+        let last_accessed = NamedNode::new(EpisodicMemory::PRED_LAST_ACCESSED)?;
+        let access_count = NamedNode::new(EpisodicMemory::PRED_ACCESS_COUNT)?;
+        let timestamp = Utc::now().to_rfc3339();
+
+        // 1. Update Last Accessed
+        // Remove old timestamp if exists
+        // We need to find the old quad to delete it
+        let old_time_quads: Vec<Quad> = self
+            .store
+            .quads_for_pattern(
+                Some(node.as_ref().into()),
+                Some(last_accessed.as_ref()),
+                None,
+                None,
+            )
+            .filter_map(Result::ok)
+            .collect();
+
+        for q in old_time_quads {
+            self.store.remove(&q)?;
+        }
+
+        self.store.insert(&Quad::new(
+            node.clone(),
+            last_accessed,
+            Literal::new_simple_literal(&timestamp),
+            GraphName::DefaultGraph,
+        ))?;
+
+        // 2. Increment Access Count
+        let mut count = 0;
+        let old_count_quads: Vec<Quad> = self
+            .store
+            .quads_for_pattern(
+                Some(node.as_ref().into()),
+                Some(access_count.as_ref()),
+                None,
+                None,
+            )
+            .filter_map(Result::ok)
+            .collect();
+
+        for q in old_count_quads {
+            if let Term::Literal(l) = &q.object {
+                if let Ok(c) = l.value().parse::<i32>() {
+                    count = c;
+                }
+            }
+            self.store.remove(&q)?;
+        }
+
+        count += 1;
+
+        self.store.insert(&Quad::new(
+            node.clone(),
+            access_count,
+            Literal::new_simple_literal(&count.to_string()),
+            GraphName::DefaultGraph,
+        ))?;
+
+        Ok(())
+    }
+
+    /// Calculate activation of a node based on recency and frequency
+    /// Activation = (Frequency / (1 + Decay * TimeSinceLastAccess))
+    pub fn get_activation(&self, uri: &str) -> f32 {
+        let clean_uri = uri.trim_start_matches('<').trim_end_matches('>');
+        let node = match NamedNode::new(clean_uri) {
+            Ok(n) => n,
+            Err(_) => return 0.0,
+        };
+
+        let last_accessed_pred =
+            match NamedNode::new(EpisodicMemory::PRED_LAST_ACCESSED) {
+                Ok(n) => n,
+                Err(_) => return 0.0,
+            };
+        let access_count_pred =
+            match NamedNode::new(EpisodicMemory::PRED_ACCESS_COUNT) {
+                Ok(n) => n,
+                Err(_) => return 0.0,
+            };
+
+        let mut frequency = 1.0;
+        let mut last_access_time = Utc::now();
+        let mut found_stats = false;
+
+        // Get Frequency
+        if let Some(q) = self
+            .store
+            .quads_for_pattern(
+                Some(node.as_ref().into()),
+                Some(access_count_pred.as_ref()),
+                None,
+                None,
+            )
+            .flatten()
+            .next()
+        {
+            if let Term::Literal(l) = q.object {
+                if let Ok(c) = l.value().parse::<f32>() {
+                    frequency = c;
+                    found_stats = true;
+                }
+            }
+        }
+
+        if !found_stats {
+            return 0.0;
+        }
+
+        // Get Recency
+        if let Some(q) = self
+            .store
+            .quads_for_pattern(
+                Some(node.as_ref().into()),
+                Some(last_accessed_pred.as_ref()),
+                None,
+                None,
+            )
+            .flatten()
+            .next()
+        {
+            if let Term::Literal(l) = q.object {
+                if let Ok(t) = chrono::DateTime::parse_from_rfc3339(l.value()) {
+                    last_access_time = t.with_timezone(&Utc);
+                }
+            }
+        }
+
+        let hours_since = (Utc::now() - last_access_time).num_minutes() as f32 / 60.0;
+        let decay = 0.1; // Decay constant
+
+        // Activation formula
+        frequency / (1.0 + decay * hours_since)
+    }
+
+    /// Spreading Activation Search
+    /// Simulates thought flow: traversing the graph based on connection strength and node activation.
+    pub fn spreading_activation_search(
+        &self,
+        start_uris: Vec<String>,
+        steps: u32,
+        decay_factor: f32,
+    ) -> Result<Vec<(String, f32)>> {
+        let mut activation_map: HashMap<String, f32> = HashMap::new();
+        let mut visited: HashSet<String> = HashSet::new();
+
+        // Initial activation
+        for uri in start_uris {
+            let base_activation = self.get_activation(&uri).max(1.0);
+            activation_map.insert(uri, base_activation);
+        }
+
+        for _ in 0..steps {
+            let mut next_activations = HashMap::new();
+
+            for (uri, current_val) in &activation_map {
+                if visited.contains(uri) {
+                    continue;
+                }
+                visited.insert(uri.clone());
+
+                // Find neighbors
+                let clean_uri = uri.trim_start_matches('<').trim_end_matches('>');
+                let node = match NamedNode::new(clean_uri) {
+                    Ok(n) => n,
+                    Err(_) => continue,
+                };
+
+                let neighbors: Vec<String> = self
+                    .store
+                    .quads_for_pattern(Some(node.as_ref().into()), None, None, None)
+                    .flatten()
+                    .map(|q| q.object.to_string())
+                    .collect();
+
+                if neighbors.is_empty() {
+                    continue;
+                }
+
+                // Spread activation to neighbors
+                // Distributed evenly? Or copy? Let's dampen it.
+                let spread_value = (current_val * decay_factor) / (neighbors.len() as f32).max(1.0);
+
+                for neighbor in neighbors {
+                    // Check if neighbor is a Literal, skip if so (usually leaf nodes)
+                    if neighbor.starts_with('"') {
+                         continue;
+                    }
+
+                    // Clean neighbor URI (remove brackets)
+                    let clean_neighbor = neighbor.trim_start_matches('<').trim_end_matches('>').to_string();
+
+                    let neighbor_activation = self.get_activation(&clean_neighbor).max(0.1); // Base node strength
+
+                    // New value = spread input + intrinsic strength
+                    let new_val = spread_value + neighbor_activation;
+
+                    let entry = next_activations.entry(clean_neighbor).or_insert(0.0);
+                    if new_val > *entry {
+                        *entry = new_val;
+                    }
+                }
+            }
+
+            // Merge next step into main map
+            for (k, v) in next_activations {
+                let entry = activation_map.entry(k).or_insert(0.0);
+                if v > *entry {
+                    *entry = v;
+                }
+            }
+        }
+
+        // Convert to sorted vec
+        let mut results: Vec<(String, f32)> = activation_map.into_iter().collect();
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        Ok(results)
+    }
+
+    /// Hybrid search: vector similarity + graph expansion (or spreading activation)
     pub async fn hybrid_search(
         &self,
         query: &str,
         vector_k: usize,
         graph_depth: u32,
+        use_spreading_activation: bool,
+        decay_factor: f32,
     ) -> Result<Vec<(String, f32)>> {
         let mut results = Vec::new();
 
@@ -304,13 +534,31 @@ impl SynapseStore {
                 let uri = result.uri.clone();
                 results.push((uri.clone(), result.score));
 
-                // Step 2: Graph expansion (if depth > 0)
-                if graph_depth > 0 {
-                    let expanded = self.expand_graph(&uri, graph_depth)?;
-                    for expanded_uri in expanded {
-                        // Add with slightly lower score
-                        results.push((expanded_uri, result.score * 0.8));
+                // Reinforce memory (simulate "recalling" it)
+                let _ = self.update_access_stats(&uri);
+            }
+
+            if graph_depth > 0 {
+                // Collect top URIs for expansion
+                let top_uris: Vec<String> = results.iter().take(5).map(|(u, _)| u.clone()).collect();
+
+                let expanded_results = if use_spreading_activation {
+                    self.spreading_activation_search(top_uris, graph_depth, decay_factor)?
+                } else {
+                    // Legacy expansion
+                    let mut exp = Vec::new();
+                    for uri in top_uris {
+                        let sub_exp = self.expand_graph(&uri, graph_depth)?;
+                        for e in sub_exp {
+                            exp.push((e, 0.5)); // Arbitrary score
+                        }
                     }
+                    exp
+                };
+
+                // Merge results
+                for (uri, score) in expanded_results {
+                    results.push((uri, score));
                 }
             }
         }
