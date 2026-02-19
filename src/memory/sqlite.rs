@@ -1,4 +1,8 @@
 use super::embeddings::EmbeddingProvider;
+use super::graph_traits::{
+    GraphEdge, GraphEdgeUpsert, GraphMemory, GraphNodeUpsert, GraphSearchResult, NeighborhoodQuery,
+    SemanticGraphQuery,
+};
 use super::traits::{Memory, MemoryCategory, MemoryEntry};
 use super::vector;
 use async_trait::async_trait;
@@ -615,6 +619,28 @@ impl Memory for SqliteMemory {
 
     async fn health_check(&self) -> bool {
         self.conn.lock().execute_batch("SELECT 1").is_ok()
+    }
+}
+
+#[async_trait]
+impl GraphMemory for SqliteMemory {
+    async fn upsert_node(&self, _node: GraphNodeUpsert) -> anyhow::Result<()> {
+        Ok(()) // No-op for now
+    }
+    async fn upsert_typed_edge(&self, _edge: GraphEdgeUpsert) -> anyhow::Result<()> {
+        Ok(()) // No-op for now
+    }
+    async fn query_by_neighborhood(
+        &self,
+        _query: NeighborhoodQuery,
+    ) -> anyhow::Result<Vec<GraphEdge>> {
+        Ok(Vec::new())
+    }
+    async fn semantic_search_with_filters(
+        &self,
+        _query: SemanticGraphQuery,
+    ) -> anyhow::Result<Vec<GraphSearchResult>> {
+        Ok(Vec::new())
     }
 }
 

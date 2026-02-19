@@ -2,6 +2,8 @@
 use crate::memory::synapse::ontology::{classes, namespaces, properties, task_status};
 #[cfg(feature = "memory-synapse")]
 use crate::memory::SynapseMemory;
+#[cfg(feature = "memory-synapse")]
+use crate::memory::Memory;
 use anyhow::Result;
 use serde_json::Value;
 use std::sync::Arc;
@@ -83,12 +85,12 @@ impl Orchestrator {
             assigned_to = properties::ASSIGNED_TO
         );
 
-        let json_result = self.memory.query_sparql(&query)?;
+        let json_result = self.memory.query_sparql(&query).await?;
         let results: Vec<Value> = serde_json::from_str(&json_result)?;
 
         let mut tasks = Vec::new();
         for row in results {
-            if let Some(uri) = row.get("task").and_then(|v| v.as_str()) {
+            if let Some(uri) = row.get("task").or_else(|| row.get("?task")).and_then(|v| v.as_str()) {
                 tasks.push(uri.to_string());
             }
         }
@@ -109,11 +111,11 @@ impl Orchestrator {
             agent_class = classes::AGENT
         );
 
-        let json_result = self.memory.query_sparql(&query)?;
+        let json_result = self.memory.query_sparql(&query).await?;
         let results: Vec<Value> = serde_json::from_str(&json_result)?;
 
         if let Some(row) = results.first() {
-            if let Some(uri) = row.get("agent").and_then(|v| v.as_str()) {
+            if let Some(uri) = row.get("agent").or_else(|| row.get("?agent")).and_then(|v| v.as_str()) {
                 return Ok(Some(uri.to_string()));
             }
         }

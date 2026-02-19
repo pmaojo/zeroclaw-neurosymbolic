@@ -219,6 +219,7 @@ async fn process_channel_message(ctx: Arc<ChannelRuntimeContext>, msg: traits::C
             true, // silent — channels don't write to stdout
             None,
             msg.channel.as_str(),
+            Some(ctx.memory.as_ref()),
         ),
     )
     .await;
