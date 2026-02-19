@@ -547,7 +547,9 @@ fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) {
                 clean_inner
             };
 
-            let mut parsed_any = false;
+                        let mut parsed_any = false;
+            let json_values = extract_json_values(final_json_str);
+            for value in json_values {
                 // Special case: if we found a tool-specific tag (like <shell>, <file_read>, etc.)
                 // and the JSON doesn't have a "name" field, construct the tool call manually
                 if !outer_tag_name.is_empty() && outer_tag_name != "tool_call" && outer_tag_name != "toolcall" && outer_tag_name != "tool-call" {
@@ -572,13 +574,12 @@ fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) {
                         }
                     }
                 }
-            let json_values = extract_json_values(final_json_str);
-            for value in json_values {
                 let parsed_calls = parse_tool_calls_from_json_value(&value);
                 if !parsed_calls.is_empty() {
                     parsed_any = true;
                     calls.extend(parsed_calls);
                 }
+            }
             }
 
             if !parsed_any {
