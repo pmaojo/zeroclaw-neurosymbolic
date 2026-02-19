@@ -82,14 +82,42 @@ impl SynapseStore {
         };
 
         // Initialize internal default vector store
-        let vector_store: Option<Arc<dyn VectorStore>> = match SimpleVectorStore::new(namespace) {
-            Ok(vs) => Some(Arc::new(vs)),
-            Err(e) => {
-                eprintln!(
-                    "WARNING: Failed to initialize default vector store for namespace '{}': {}",
-                    namespace, e
-                );
-                None
+        let vector_store: Option<Arc<dyn VectorStore>> = {
+            #[cfg(feature = "lance-storage")]
+            {
+                match crate::lance_store::LanceVectorStore::new(namespace, storage_path) {
+                    Ok(vs) => Some(Arc::new(vs)),
+                    Err(e) => {
+                        eprintln!(
+                            "WARNING: Failed to initialize Lance vector store for namespace '{}': {}",
+                            namespace, e
+                        );
+                        // Fallback to SimpleVectorStore
+                        match SimpleVectorStore::new(namespace) {
+                            Ok(vs) => Some(Arc::new(vs)),
+                            Err(e) => {
+                                eprintln!(
+                                    "WARNING: Failed to initialize fallback SimpleVectorStore for namespace '{}': {}",
+                                    namespace, e
+                                );
+                                None
+                            }
+                        }
+                    }
+                }
+            }
+            #[cfg(not(feature = "lance-storage"))]
+            {
+                match SimpleVectorStore::new(namespace) {
+                    Ok(vs) => Some(Arc::new(vs)),
+                    Err(e) => {
+                        eprintln!(
+                            "WARNING: Failed to initialize default vector store for namespace '{}': {}",
+                            namespace, e
+                        );
+                        None
+                    }
+                }
             }
         };
 
@@ -265,7 +293,7 @@ impl SynapseStore {
                 if let Some(ref vs) = self.vector_store {
                     // We check if it's already in the vector store by key
                     let key = format!("{}|{}|{}", subject_uri, predicate_uri, object_key_str);
-                    if vs.get_id(&key).is_none() {
+                    if vs.get_id(&key).await.unwrap_or(None).is_none() {
                         // Create searchable content from triple
                         let content = format!("{} {} {}", s, p, o);
                         // Pass metadata including the subject URI for graph expansion later

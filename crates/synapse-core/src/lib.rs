@@ -9,6 +9,8 @@ pub mod reasoner;
 pub mod scenarios;
 pub mod store;
 pub mod vector_store;
+#[cfg(feature = "lance-storage")]
+pub mod lance_store;
 
 #[cfg(test)]
 pub mod tests;
