@@ -368,7 +368,6 @@ impl Provider for GeminiProvider {
         
         Ok(fixed_text)
     }
-    }
 }
 
 #[cfg(test)]
