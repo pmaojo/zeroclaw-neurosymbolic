@@ -200,7 +200,7 @@ Every subsystem is a **trait** — swap implementations with a config change, ze
 |-----------|-------|------------|--------|
 | **AI Models** | `Provider` | 23+ providers (OpenRouter, Anthropic, OpenAI, Ollama, Venice, Groq, Mistral, xAI, DeepSeek, Together, Fireworks, Perplexity, Cohere, Bedrock, Astrai, etc.) | `custom:https://your-api.com` — any OpenAI-compatible API |
 | **Channels** | `Channel` | CLI, Telegram, Discord, Slack, Mattermost, iMessage, Matrix, WhatsApp, Webhook, Email, Signal, IRC, Lark, DingTalk, QQ | Any messaging API |
-| **Memory** | `Memory` | SQLite with hybrid search (FTS5 + vector cosine similarity), Lucid bridge (CLI sync + SQLite fallback), Markdown | Any persistence backend |
+| **Memory** | `Memory` | **Synapse Core** (Hybrid: Oxigraph Graph + SQLite Vectors), SQLite (fallback), Markdown, Lucid | Any persistence backend |
 | **Tools** | `Tool` | shell, file_read, file_write, memory_store, memory_recall, memory_forget, browser_open, browser (agent-browser / rust-native), composio (optional), cron_*, schedule, git, http_request, screenshot, image_info, pushover, delegate, hardware_* | Any capability |
 | **Observability** | `Observer` | Noop, Log, Multi | Prometheus, OTel |
 | **Runtime** | `RuntimeAdapter` | Native, Docker (sandboxed) | WASM (planned; unsupported kinds fail fast) |
@@ -218,39 +218,26 @@ Every subsystem is a **trait** — swap implementations with a config change, ze
 
 When an unsupported `runtime.kind` is configured, ZeroClaw now exits with a clear error instead of silently falling back to native.
 
-### Memory System (Full-Stack Search Engine)
+### Memory System (Consolidated Synapse Core)
 
-All custom, zero external dependencies — no Pinecone, no Elasticsearch, no LangChain:
+ZeroClaw now uses a unified **Neuro-Symbolic Memory System** powered by **Synapse Core**:
 
 | Layer | Implementation |
 |-------|---------------|
-| **Vector DB** | Embeddings stored as BLOB in SQLite, cosine similarity search |
-| **Keyword Search** | FTS5 virtual tables with BM25 scoring |
-| **Hybrid Merge** | Custom weighted merge function (`vector.rs`) |
-| **Embeddings** | `EmbeddingProvider` trait — OpenAI, custom URL, or noop |
-| **Chunking** | Line-based markdown chunker with heading preservation |
-| **Caching** | SQLite `embedding_cache` table with LRU eviction |
-| **Safe Reindex** | Rebuild FTS5 + re-embed missing vectors atomically |
+| **Graph DB** | **Oxigraph** (SPARQL 1.1) for semantic reasoning and relations |
+| **Vector DB** | **SQLite** (FTS5 + Embeddings) for efficient content search |
+| **Hybrid Search** | Combines vector similarity with graph traversal (spreading activation) |
+| **Consistency** | Automatic synchronization between Graph and Vector/Content stores |
+| **Episodic** | Tracks access frequency and recency via graph triples (`synapse:lastAccessed`) |
 
-The agent automatically recalls, saves, and manages memory via tools.
+This architecture combines the **reasoning power of Knowledge Graphs** with the **efficiency of SQLite**, eliminating data duplication while preserving full capabilities.
 
 ```toml
 [memory]
-backend = "sqlite"          # "sqlite", "lucid", "markdown", "none"
+backend = "synapse"         # Default: Synapse Core (Graph + SQLite)
+# backend = "sqlite"        # Fallback: Pure SQLite (No Graph)
 auto_save = true
 embedding_provider = "openai"
-vector_weight = 0.7
-keyword_weight = 0.3
-
-# backend = "none" uses an explicit no-op memory backend (no persistence)
-
-# Optional for backend = "lucid"
-# ZEROCLAW_LUCID_CMD=/usr/local/bin/lucid   # default: lucid
-# ZEROCLAW_LUCID_BUDGET=200                 # default: 200
-# ZEROCLAW_LUCID_LOCAL_HIT_THRESHOLD=3      # local hit count to skip external recall
-# ZEROCLAW_LUCID_RECALL_TIMEOUT_MS=120      # low-latency budget for lucid context recall
-# ZEROCLAW_LUCID_STORE_TIMEOUT_MS=800        # async sync timeout for lucid store
-# ZEROCLAW_LUCID_FAILURE_COOLDOWN_MS=15000   # cooldown after lucid failure to avoid repeated slow attempts
 ```
 
 ### Hardware & Peripherals

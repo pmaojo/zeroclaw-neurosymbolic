@@ -1,6 +1,6 @@
 use crate::episodic::EpisodicMemory;
 use crate::persistence::{load_bincode, save_bincode};
-use crate::vector_store::VectorStore;
+use crate::vector_store::{SimpleVectorStore, VectorStore};
 use anyhow::Result;
 use chrono::Utc;
 use oxigraph::model::*;
@@ -44,7 +44,7 @@ pub struct SynapseStore {
     pub uri_to_id: RwLock<HashMap<String, u32>>,
     pub next_id: std::sync::atomic::AtomicU32,
     // Vector store for hybrid search
-    pub vector_store: Option<Arc<VectorStore>>,
+    pub vector_store: Option<Arc<dyn VectorStore>>,
     // Persistence state
     dirty_count: AtomicUsize,
     save_threshold: usize,
@@ -81,12 +81,12 @@ impl SynapseStore {
             (HashMap::new(), HashMap::new(), 1)
         };
 
-        // Initialize vector store (optional, can fail gracefully)
-        let vector_store = match VectorStore::new(namespace) {
+        // Initialize internal default vector store
+        let vector_store: Option<Arc<dyn VectorStore>> = match SimpleVectorStore::new(namespace) {
             Ok(vs) => Some(Arc::new(vs)),
             Err(e) => {
                 eprintln!(
-                    "WARNING: Failed to initialize vector store for namespace '{}': {}",
+                    "WARNING: Failed to initialize default vector store for namespace '{}': {}",
                     namespace, e
                 );
                 None
@@ -104,6 +104,11 @@ impl SynapseStore {
             dirty_count: AtomicUsize::new(0),
             save_threshold: DEFAULT_MAPPING_SAVE_THRESHOLD,
         })
+    }
+
+    /// Set a custom vector store backend (replacing the default one)
+    pub fn set_vector_store(&mut self, vector_store: Arc<dyn VectorStore>) {
+        self.vector_store = Some(vector_store);
     }
 
     /// Save URI mappings to disk

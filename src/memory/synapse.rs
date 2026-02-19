@@ -22,9 +22,91 @@ use crate::memory::synapse::ontology::{classes, namespaces, properties};
 use synapse_core::scenarios::{ScenarioManager, ScenarioSourcePolicy};
 #[cfg(feature = "memory-synapse")]
 use synapse_core::store::{IngestTriple, Provenance, SynapseStore};
+#[cfg(feature = "memory-synapse")]
+use synapse_core::vector_store::{VectorStore, SearchResult};
 
 #[cfg(feature = "memory-synapse")]
 const MAX_ONTOLOGY_IMPORT_BYTES: u64 = 5 * 1024 * 1024;
+
+// Wrapper struct to expose SqliteMemory as a VectorStore
+#[cfg(feature = "memory-synapse")]
+pub struct SqliteVectorStoreAdapter {
+    sqlite: Arc<SqliteMemory>,
+}
+
+#[cfg(feature = "memory-synapse")]
+#[async_trait]
+impl VectorStore for SqliteVectorStoreAdapter {
+    async fn add(
+        &self,
+        key: &str,
+        content: &str,
+        _metadata: Value,
+    ) -> anyhow::Result<usize> {
+        // We ignore metadata for now as SqliteMemory handles its own schema
+        // and we map Graph Nodes to Memory Keys 1:1.
+        // Also SqliteMemory computes its own embeddings.
+        self.sqlite.store(key, content, MemoryCategory::Core, None).await?;
+        Ok(0) // ID is not used by SqliteMemory in the same way
+    }
+
+    async fn add_batch(
+        &self,
+        items: Vec<(String, String, Value)>,
+    ) -> anyhow::Result<Vec<usize>> {
+        let mut ids = Vec::new();
+        for (key, content, _) in items {
+             self.sqlite.store(&key, &content, MemoryCategory::Core, None).await?;
+             ids.push(0);
+        }
+        Ok(ids)
+    }
+
+    async fn search(&self, query: &str, k: usize) -> anyhow::Result<Vec<SearchResult>> {
+        let results = self.sqlite.recall(query, k, None).await?;
+
+        let search_results = results.into_iter().map(|entry| {
+            // Reconstruct the URI if possible.
+            // In store(), we used key directly.
+            // SynapseStore expects URI in metadata or key.
+            // If the key is just the ID, we need to know the namespace.
+            // But wait, SynapseStore.hybrid_search calls this.
+            // It expects `uri` in the result.
+
+            // For now, let's assume the key IS the URI suffix or the full URI if mapped.
+            // But SqliteMemory stores keys like "my-memory-key".
+            // And Synapse node URI is "http://zeroclaw.os/Memory/my-memory-key".
+
+            // We need to be consistent.
+            // In `store()` below, we create node URI: `namespaces::ZEROCLAW + "Memory/" + key`.
+            // So if we get `key` back from Sqlite, we can reconstruct the URI.
+
+            let uri = format!("{}Memory/{}", namespaces::ZEROCLAW, entry.key);
+
+            SearchResult {
+                key: entry.key,
+                score: entry.score.unwrap_or(0.0) as f32,
+                metadata: serde_json::json!({ "uri": uri }), // Inject URI for SynapseStore
+                uri,
+            }
+        }).collect();
+
+        Ok(search_results)
+    }
+
+    fn get_id(&self, _key: &str) -> Option<usize> {
+        // Not used by SqliteMemory based implementation effectively
+        // Returning None forces SynapseStore to call `add` if it checks.
+        // But since we implement add as upsert, it is safe.
+        None
+    }
+
+    fn flush(&self) -> anyhow::Result<()> {
+        // SqliteMemory is transactional/WAL, essentially auto-flushing or handled by sqlite
+        Ok(())
+    }
+}
+
 
 #[cfg(feature = "memory-synapse")]
 #[derive(Debug, Clone, Copy)]
@@ -77,7 +159,7 @@ impl OntologyImportFormat {
 
 pub struct SynapseMemory {
     #[cfg(feature = "memory-synapse")]
-    local: SqliteMemory,
+    local: Arc<SqliteMemory>, // Changed to Arc to share with adapter
     #[cfg(feature = "memory-synapse")]
     store: Arc<SynapseStore>,
     #[cfg(feature = "memory-synapse")]
@@ -96,7 +178,16 @@ impl SynapseMemory {
     ) -> anyhow::Result<Self> {
         let namespace = "zeroclaw";
         // SynapseStore expects the parent directory path
-        let store = SynapseStore::open(namespace, workspace_dir.to_str().unwrap())?;
+        let mut store = SynapseStore::open(namespace, workspace_dir.to_str().unwrap())?;
+
+        // Wrap the provided SqliteMemory in an Arc
+        let local_arc = Arc::new(local);
+
+        // Inject the SqliteVectorStoreAdapter into SynapseStore
+        let vector_adapter = SqliteVectorStoreAdapter {
+            sqlite: local_arc.clone(),
+        };
+        store.set_vector_store(Arc::new(vector_adapter));
 
         let scenario_policy = ScenarioSourcePolicy {
             allow_remote_scenarios: source_policy.allow_remote_scenarios,
@@ -106,7 +197,7 @@ impl SynapseMemory {
         let scenario_manager = ScenarioManager::with_policy(workspace_dir, scenario_policy);
 
         Ok(Self {
-            local,
+            local: local_arc,
             store: Arc::new(store),
             scenario_manager: Arc::new(scenario_manager),
         })
