@@ -252,8 +252,6 @@ impl GeminiProvider {
     }
 }
 
-#[async_trait]
-
 // Fix Gemini's non-standard tool call format (e.g., <shell>{"command": "ls"}</shell>)
 pub(crate) fn fix_gemini_response(response: &str) -> String {
     use regex::Regex;
@@ -295,6 +293,8 @@ pub(crate) fn fix_gemini_response(response: &str) -> String {
     
     fixed
 }
+
+#[async_trait]
 impl Provider for GeminiProvider {
     async fn chat_with_system(
         &self,
