@@ -255,7 +255,7 @@ impl GeminiProvider {
 #[async_trait]
 
 // Fix Gemini's non-standard tool call format (e.g., <shell>{"command": "ls"}</shell>)
-fn fix_gemini_response(response: &str) -> String {
+pub(crate) fn fix_gemini_response(response: &str) -> String {
     use regex::Regex;
     use serde_json::{json, Value};
     
