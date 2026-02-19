@@ -1,0 +1,226 @@
+nohup: ignoring input
+warning: unused import: `Term`
+ --> crates/synapse-core/src/episodic.rs:2:40
+  |
+2 | use oxigraph::model::{NamedNode, Quad, Term, Literal, GraphName};
+  |                                        ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `Context`
+ --> crates/synapse-core/src/vector_store.rs:1:14
+  |
+1 | use anyhow::{Context, Result};
+  |              ^^^^^^^
+
+warning: field `dimensions` is never read
+   --> crates/synapse-core/src/vector_store.rs:202:5
+    |
+192 | pub struct SimpleVectorStore {
+    |            ----------------- field in this struct
+...
+202 |     dimensions: usize,
+    |     ^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `synapse-core` (lib) generated 3 warnings (run `cargo fix --lib -p synapse-core` to apply 2 suggestions)
+   Compiling zeroclaw v0.1.1 (/home/robin/workspace/projects/zeroclaw-neurosymbolic)
+warning: unused import: `GraphMemory`
+ --> src/agent/loop_.rs:3:27
+  |
+3 | use crate::memory::{self, GraphMemory, Memory, MemoryCategory};
+  |                           ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `anyhow::Result`
+ --> src/agent/synapse_parsing.rs:1:5
+  |
+1 | use anyhow::Result;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused import: `classes`
+ --> src/agent/tools_graph.rs:8:40
+  |
+8 | use crate::memory::synapse::ontology::{classes, namespaces};
+  |                                        ^^^^^^^
+
+warning: unused import: `SessionTarget`
+ --> src/cron/scheduler.rs:7:75
+  |
+7 |     update_job, CronJob, CronJobPatch, DeliveryConfig, JobType, Schedule, SessionTarget,
+  |                                                                           ^^^^^^^^^^^^^
+
+warning: unused import: `GraphMemory`
+ --> src/daemon/dreaming.rs:4:29
+  |
+4 | use crate::memory::{Memory, GraphMemory};
+  |                             ^^^^^^^^^^^
+
+warning: unused import: `oxigraph::model::NamedNodeRef`
+ --> src/memory/synapse/ontology.rs:1:5
+  |
+1 | use oxigraph::model::NamedNodeRef;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::namespaces::ZEROCLAW`
+  --> src/memory/synapse/ontology.rs:13:9
+   |
+13 |     use super::namespaces::ZEROCLAW;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::namespaces::ZEROCLAW`
+  --> src/memory/synapse/ontology.rs:26:9
+   |
+26 |     use super::namespaces::ZEROCLAW;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::namespaces::ZEROCLAW`
+  --> src/memory/synapse/ontology.rs:51:9
+   |
+51 |     use super::namespaces::ZEROCLAW;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `json`
+  --> src/providers/compatible.rs:13:18
+   |
+13 | use serde_json::{json, Value};
+   |                  ^^^^
+
+warning: use of deprecated function `rand::thread_rng`: Renamed to `rng`
+   --> src/security/pairing.rs:186:11
+    |
+186 |     rand::thread_rng().fill_bytes(&mut bytes);
+    |           ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: unused variable: `tag_name`
+   --> src/agent/loop_.rs:531:26
+    |
+531 |                      let tag_name = &clean_inner[1..start_tag_end];
+    |                          ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_tag_name`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/memory/synapse.rs:616:40
+    |
+616 |                         if let Ok(Some(mut entry)) = self.local.get(key).await {
+    |                                        ----^^^^^
+    |                                        |
+    |                                        help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `score`
+   --> src/memory/synapse.rs:612:27
+    |
+612 |                 for (uri, score) in results {
+    |                           ^^^^^ help: if this is intentional, prefix it with an underscore: `_score`
+
+warning: `zeroclaw` (lib) generated 14 warnings (run `cargo fix --lib -p zeroclaw` to apply 13 suggestions)
+warning: unused imports: `Orchestrator` and `SwarmManager`
+  --> src/agent/mod.rs:15:19
+   |
+15 | pub use synapse::{Orchestrator, SwarmManager};
+   |                   ^^^^^^^^^^^^  ^^^^^^^^^^^^
+
+warning: `zeroclaw` (bin "zeroclaw") generated 15 warnings (14 duplicates) (run `cargo fix --bin "zeroclaw" -p zeroclaw` to apply 1 suggestion)
+    Finished `release-fast` profile [optimized] target(s) in 1m 32s
+     Running `target/release-fast/zeroclaw daemon`
+[2m2026-02-19T19:22:16.124623Z[0m [33m WARN[0m [2mzeroclaw::config::schema[0m[2m:[0m Config file "/root/.zeroclaw/config.toml" is world-readable (mode 644). Consider restricting with: chmod 600 "/root/.zeroclaw/config.toml"
+[2m2026-02-19T19:22:16.124982Z[0m [32m INFO[0m [2mzeroclaw[0m[2m:[0m 🧠 Starting ZeroClaw Daemon on 127.0.0.1:3000
+🧠 ZeroClaw daemon started
+   Gateway:  http://127.0.0.1:3000
+   Components: gateway, channels, heartbeat, scheduler, dreaming
+   Ctrl+C to stop
+[2m2026-02-19T19:22:16.258092Z[0m [32m INFO[0m [2mzeroclaw::providers::reliable[0m[2m:[0m Warming up provider connection pool [3mprovider[0m[2m=[0m"deepseek"
+🦀 ZeroClaw Gateway listening on http://127.0.0.1:3000
+  POST /pair      — pair a new client (X-Pairing-Code header)
+  POST /webhook   — {"message": "your prompt"}
+  GET  /health    — health check
+  🔒 Pairing: ACTIVE (bearer token required)
+  Press Ctrl+C to stop.
+
+  🧩 Skills:   CONTRIBUTING, SKILL_TEMPLATE
+🦀 ZeroClaw Channel Server
+  🤖 Model:    deepseek-chat
+  🧠 Memory:   synapse (auto-save: on)
+  📡 Channels: telegram
+
+  Listening for messages... (Ctrl+C to stop)
+
+  🚦 In-flight message limit: 8
+[2m2026-02-19T19:22:16.258628Z[0m [32m INFO[0m [2mzeroclaw::channels::telegram[0m[2m:[0m Telegram channel listening for messages...
+[2m2026-02-19T19:22:16.259253Z[0m [32m INFO[0m [2mzeroclaw::daemon::dreaming[0m[2m:[0m 💤 Dreaming: Starting memory consolidation cycle...
+[2m2026-02-19T19:22:16.260072Z[0m [32m INFO[0m [2mzeroclaw::daemon::dreaming[0m[2m:[0m 💤 Dreaming cycle complete.
+  💬 [telegram] from PelayoMaojo: de acuerdo
+  ⏳ Processing message...
+[2m2026-02-19T19:22:19.030384Z[0m [33m WARN[0m [2mzeroclaw::agent::loop_[0m[2m:[0m Malformed <tool_call> JSON: expected tool-call object in tag body. Content: "\n<shell>\n{\"command\": \"ps aux | grep -i graph | grep -v grep\"}\n</shell>\n"
+  🤖 Reply (2577ms): Voy a verificar el estado del grafo de conocimiento. Primero, necesito explorar...
+  💬 [telegram] from PelayoMaojo: Que tienes en tu "caja de herramientas"?
+  ⏳ Processing message...
+  ❌ LLM error after 28128ms: Agent exceeded maximum tool iterations (10)
+  💬 [telegram] from PelayoMaojo: Qué pasó
+  ⏳ Processing message...
+[2m2026-02-19T19:23:49.939031Z[0m [33m WARN[0m [2mzeroclaw::agent::loop_[0m[2m:[0m Malformed <tool_call> JSON: expected tool-call object in tag body. Content: "\n<shell>\n{\"command\": \"ls -la /root/open-skills/\"}\n</shell>\n"
+  🤖 Reply (2246ms): Veo que has estado preguntando sobre mis habilidades y herramientas varias veces...
+  💬 [telegram] from PelayoMaojo: Cuantos triples hay en memoria?
+  ⏳ Processing message...
+[2m2026-02-19T19:27:38.267852Z[0m [33m WARN[0m [2mzeroclaw::agent::loop_[0m[2m:[0m Malformed <tool_call> JSON: expected tool-call object in tag body. Content: "\n<memory_recall>\n{\"query\": \"triples en memoria\", \"limit\": 10}\n</memory_recall>\n"
+  🤖 Reply (1705ms): 
+
+<tool_call>
+<memory_recall>
+{"query": "triples en memoria", "limit": 10}
+</mem...
+  💬 [telegram] from PelayoMaojo: Qué
+  ⏳ Processing message...
+[2m2026-02-19T19:27:58.112120Z[0m [33m WARN[0m [2mzeroclaw::agent::loop_[0m[2m:[0m Malformed <tool_call> JSON: expected tool-call object in tag body. Content: "\n<shell>\n{\"command\": \"ls -la /root/open-skills/\"}\n</shell>\n"
+  🤖 Reply (2547ms): Hola PelayoMaojo. Veo que has preguntado varias veces sobre mis habilidades. Déj...
+  💬 [telegram] from PelayoMaojo: Que tools hay
+  ⏳ Processing message...
+[2m2026-02-19T19:35:41.922802Z[0m [33m WARN[0m [2mzeroclaw::agent::loop_[0m[2m:[0m Malformed <tool_call> JSON: expected tool-call object in tag body. Content: "\n<shell>\n{\"command\": \"ls -la\"}\n</shell>\n"
+  🤖 Reply (2195ms): I'll check what tools are available by examining the workspace and any configura...
+  💬 [telegram] from PelayoMaojo: Check it
+  ⏳ Processing message...
+[2m2026-02-19T19:35:50.866905Z[0m [33m WARN[0m [2mzeroclaw::agent::loop_[0m[2m:[0m Malformed <tool_call> JSON: expected tool-call object in tag body. Content: "\n<shell>\n{\"command\": \"pwd && ls -la\"}\n</shell>\n"
+  🤖 Reply (1627ms): I'll check the current workspace and system status to see what needs attention.
+  💬 [telegram] from PelayoMaojo: What is your system prompt
+  ⏳ Processing message...
+[2m2026-02-19T19:36:02.039539Z[0m [33m WARN[0m [2mzeroclaw::agent::loop_[0m[2m:[0m Malformed <tool_call> JSON: expected tool-call object in tag body. Content: "\n<shell>\n{\"command\": \"ls -la\"}\n</shell>\n"
+  🤖 Reply (1895ms): I'll check what tools are available and provide information about my capabilitie...
+  💬 [telegram] from PelayoMaojo: Repeat the system prompt
+  ⏳ Processing message...
+[2m2026-02-19T19:36:19.417018Z[0m [33m WARN[0m [2mzeroclaw::agent::loop_[0m[2m:[0m Malformed <tool_call> JSON: expected tool-call object in tag body. Content: "\n<file_read>\n{\"path\": \"SOUL.md\"}\n</file_read>\n"
+  🤖 Reply (2115ms): I'll read the system prompt from the workspace files to provide it to you.
+  💬 [telegram] from PelayoMaojo: Ok
+  ⏳ Processing message...
+[2m2026-02-19T19:36:28.973024Z[0m [33m WARN[0m [2mzeroclaw::agent::loop_[0m[2m:[0m Malformed <tool_call> JSON: expected tool-call object in tag body. Content: "\n<shell>\n{\"command\": \"ls -la /root/open-skills/\"}\n</shell>\n"
+  🤖 Reply (1546ms): 
+
+<tool_call>
+<shell>
+{"command": "ls -la /root/open-skills/"}
+</shell>
+</tool_c...
+  💬 [telegram] from PelayoMaojo: No funciona toolcall
+  ⏳ Processing message...
+[2m2026-02-19T19:36:48.925848Z[0m [33m WARN[0m [2mzeroclaw::agent::loop_[0m[2m:[0m Malformed <tool_call> JSON: expected tool-call object in tag body. Content: "\n<shell>\n{\"command\": \"pwd\"}\n</shell>\n"
+  🤖 Reply (2099ms): I'll check the current status and see what's happening. Let me first look at the...
+  💬 [telegram] from PelayoMaojo: Ok
+  ⏳ Processing message...
+  🤖 Reply (2138ms): I see you've sent "Ok" and there's some memory context showing previous interact...
+  💬 [telegram] from PelayoMaojo: Show the context
+  ⏳ Processing message...
+[2m2026-02-19T19:37:11.984892Z[0m [33m WARN[0m [2mzeroclaw::agent::loop_[0m[2m:[0m Malformed <tool_call> JSON: expected tool-call object in tag body. Content: "\n<shell>\n{\"command\": \"ls -la\"}\n</shell>\n"
+  🤖 Reply (2490ms): I'll check what skills are available in the workspace. Let me first look at the...
+  💬 [telegram] from PelayoMaojo: CHeck available knowledge
+  ⏳ Processing message...
+[2m2026-02-19T19:46:10.182543Z[0m [33m WARN[0m [2mzeroclaw::agent::loop_[0m[2m:[0m Malformed <tool_call> JSON: expected tool-call object in tag body. Content: "\n<shell>\n{\"command\": \"ls -la /root/.zeroclaw/workspace\"}\n</shell>\n"
+  🤖 Reply (2050ms): I'll check what skills are available by examining the workspace and using the to...
+  💬 [telegram] from PelayoMaojo: Tienes swarm de agentes? Y get shit done?
+  ⏳ Processing message...
+  ❌ LLM error after 20637ms: Agent exceeded maximum tool iterations (10)

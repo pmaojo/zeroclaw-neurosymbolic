@@ -43,7 +43,15 @@ impl XmlToolDispatcher {
 
             if let Some(end) = remaining[start..].find("</tool_call>") {
                 let inner = &remaining[start + 11..start + end];
-                match serde_json::from_str::<Value>(inner.trim()) {
+                let inner_trimmed = inner.trim();
+                let clean_inner = if inner_trimmed.starts_with("```") {
+                    let t1 = inner_trimmed.trim_start_matches("```json").trim_start_matches("```");
+                    t1.trim_end_matches("```").trim()
+                } else {
+                    inner_trimmed
+                };
+
+                match serde_json::from_str::<Value>(clean_inner) {
                     Ok(parsed) => {
                         let name = parsed
                             .get("name")

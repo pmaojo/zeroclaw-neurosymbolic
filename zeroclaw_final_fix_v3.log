@@ -1,0 +1,160 @@
+nohup: ignoring input
+warning: unused import: `Term`
+ --> crates/synapse-core/src/episodic.rs:2:40
+  |
+2 | use oxigraph::model::{NamedNode, Quad, Term, Literal, GraphName};
+  |                                        ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `Context`
+ --> crates/synapse-core/src/vector_store.rs:1:14
+  |
+1 | use anyhow::{Context, Result};
+  |              ^^^^^^^
+
+warning: field `dimensions` is never read
+   --> crates/synapse-core/src/vector_store.rs:202:5
+    |
+192 | pub struct SimpleVectorStore {
+    |            ----------------- field in this struct
+...
+202 |     dimensions: usize,
+    |     ^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `synapse-core` (lib) generated 3 warnings (run `cargo fix --lib -p synapse-core` to apply 2 suggestions)
+   Compiling zeroclaw v0.1.1 (/home/robin/workspace/projects/zeroclaw-neurosymbolic)
+warning: unused import: `GraphMemory`
+ --> src/agent/loop_.rs:3:27
+  |
+3 | use crate::memory::{self, GraphMemory, Memory, MemoryCategory};
+  |                           ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `anyhow::Result`
+ --> src/agent/synapse_parsing.rs:1:5
+  |
+1 | use anyhow::Result;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused import: `classes`
+ --> src/agent/tools_graph.rs:8:40
+  |
+8 | use crate::memory::synapse::ontology::{classes, namespaces};
+  |                                        ^^^^^^^
+
+warning: unused import: `SessionTarget`
+ --> src/cron/scheduler.rs:7:75
+  |
+7 |     update_job, CronJob, CronJobPatch, DeliveryConfig, JobType, Schedule, SessionTarget,
+  |                                                                           ^^^^^^^^^^^^^
+
+warning: unused import: `GraphMemory`
+ --> src/daemon/dreaming.rs:4:29
+  |
+4 | use crate::memory::{Memory, GraphMemory};
+  |                             ^^^^^^^^^^^
+
+warning: unused import: `oxigraph::model::NamedNodeRef`
+ --> src/memory/synapse/ontology.rs:1:5
+  |
+1 | use oxigraph::model::NamedNodeRef;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::namespaces::ZEROCLAW`
+  --> src/memory/synapse/ontology.rs:13:9
+   |
+13 |     use super::namespaces::ZEROCLAW;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::namespaces::ZEROCLAW`
+  --> src/memory/synapse/ontology.rs:26:9
+   |
+26 |     use super::namespaces::ZEROCLAW;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::namespaces::ZEROCLAW`
+  --> src/memory/synapse/ontology.rs:51:9
+   |
+51 |     use super::namespaces::ZEROCLAW;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `json`
+  --> src/providers/compatible.rs:13:18
+   |
+13 | use serde_json::{json, Value};
+   |                  ^^^^
+
+warning: use of deprecated function `rand::thread_rng`: Renamed to `rng`
+   --> src/security/pairing.rs:186:11
+    |
+186 |     rand::thread_rng().fill_bytes(&mut bytes);
+    |           ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: variable does not need to be mutable
+   --> src/memory/synapse.rs:616:40
+    |
+616 |                         if let Ok(Some(mut entry)) = self.local.get(key).await {
+    |                                        ----^^^^^
+    |                                        |
+    |                                        help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `score`
+   --> src/memory/synapse.rs:612:27
+    |
+612 |                 for (uri, score) in results {
+    |                           ^^^^^ help: if this is intentional, prefix it with an underscore: `_score`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `zeroclaw` (lib) generated 13 warnings (run `cargo fix --lib -p zeroclaw` to apply 12 suggestions)
+warning: unused imports: `Orchestrator` and `SwarmManager`
+  --> src/agent/mod.rs:15:19
+   |
+15 | pub use synapse::{Orchestrator, SwarmManager};
+   |                   ^^^^^^^^^^^^  ^^^^^^^^^^^^
+
+warning: `zeroclaw` (bin "zeroclaw") generated 14 warnings (13 duplicates) (run `cargo fix --bin "zeroclaw" -p zeroclaw` to apply 1 suggestion)
+    Finished `release-fast` profile [optimized] target(s) in 1m 34s
+     Running `target/release-fast/zeroclaw daemon`
+[2m2026-02-19T19:17:18.635821Z[0m [33m WARN[0m [2mzeroclaw::config::schema[0m[2m:[0m Config file "/root/.zeroclaw/config.toml" is world-readable (mode 644). Consider restricting with: chmod 600 "/root/.zeroclaw/config.toml"
+[2m2026-02-19T19:17:18.636302Z[0m [32m INFO[0m [2mzeroclaw[0m[2m:[0m 🧠 Starting ZeroClaw Daemon on 127.0.0.1:3000
+🧠 ZeroClaw daemon started
+   Gateway:  http://127.0.0.1:3000
+   Components: gateway, channels, heartbeat, scheduler, dreaming
+   Ctrl+C to stop
+🦀 ZeroClaw Gateway listening on http://127.0.0.1:3000
+  POST /pair      — pair a new client (X-Pairing-Code header)
+  POST /webhook   — {"message": "your prompt"}
+  GET  /health    — health check
+  🔒 Pairing: ACTIVE (bearer token required)
+  Press Ctrl+C to stop.
+
+[2m2026-02-19T19:17:18.793417Z[0m [32m INFO[0m [2mzeroclaw::providers::reliable[0m[2m:[0m Warming up provider connection pool [3mprovider[0m[2m=[0m"deepseek"
+[2m2026-02-19T19:17:18.793466Z[0m [32m INFO[0m [2mzeroclaw::daemon::dreaming[0m[2m:[0m 💤 Dreaming: Starting memory consolidation cycle...
+  🧩 Skills:   CONTRIBUTING, SKILL_TEMPLATE
+🦀 ZeroClaw Channel Server
+  🤖 Model:    deepseek-chat
+  🧠 Memory:   synapse (auto-save: on)
+  📡 Channels: telegram
+
+  Listening for messages... (Ctrl+C to stop)
+
+  🚦 In-flight message limit: 8
+[2m2026-02-19T19:17:18.793863Z[0m [32m INFO[0m [2mzeroclaw::channels::telegram[0m[2m:[0m Telegram channel listening for messages...
+[2m2026-02-19T19:17:18.794428Z[0m [32m INFO[0m [2mzeroclaw::daemon::dreaming[0m[2m:[0m 💤 Dreaming cycle complete.
+  💬 [telegram] from PelayoMaojo: está funcionando el grafo de conocimiento?
+  ⏳ Processing message...
+[2m2026-02-19T19:17:21.361252Z[0m [33m WARN[0m [2mzeroclaw::agent::loop_[0m[2m:[0m Malformed <tool_call> JSON: expected tool-call object in tag body. Content: "\n<shell>\n{\"command\": \"ps aux | grep -i graph | grep -v grep\"}\n</shell>\n"
+  🤖 Reply (2320ms): Voy a verificar el estado del grafo de conocimiento. Primero, voy a explorar qué...
+  💬 [telegram] from PelayoMaojo: está funcionando el grafo de conocimiento?
+  ⏳ Processing message...
+[2m2026-02-19T19:18:19.641029Z[0m [33m WARN[0m [2mzeroclaw::agent::loop_[0m[2m:[0m Malformed <tool_call> JSON: expected tool-call object in tag body. Content: "\n<shell>\n{\"command\": \"ps aux | grep -E '(neo4j|memgraph|arangodb|graph|knowledge)' | grep -v grep\"}\n</shell>\n"
+  🤖 Reply (2640ms): Voy a verificar el estado del grafo de conocimiento. Primero, voy a explorar qué...

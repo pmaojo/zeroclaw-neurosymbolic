@@ -1,28 +1,10 @@
-nohup: ignoring input
-[2m2026-02-19T17:53:11.782505Z[0m [32m INFO[0m [2mzeroclaw[0m[2m:[0m 🧠 Starting ZeroClaw Daemon on 127.0.0.1:3000
+[2m2026-02-19T18:04:09.788285Z[0m [32m INFO[0m [2mzeroclaw[0m[2m:[0m 🧠 Starting ZeroClaw Daemon on 127.0.0.1:3000
 WARNING: Failed to initialize default vector store for namespace 'zeroclaw': HF_TOKEN not set and local-embeddings disabled
 🧠 ZeroClaw daemon started
    Gateway:  http://127.0.0.1:3000
    Components: gateway, channels, heartbeat, scheduler, dreaming
    Ctrl+C to stop
-[2m2026-02-19T17:53:11.927471Z[0m [32m INFO[0m [2mzeroclaw::providers::reliable[0m[2m:[0m Warming up provider connection pool [3mprovider[0m[2m=[0m"deepseek"
-[2m2026-02-19T17:53:11.928678Z[0m [32m INFO[0m [2mzeroclaw::daemon::dreaming[0m[2m:[0m 💤 Dreaming: Starting memory consolidation cycle...
-[2m2026-02-19T17:53:11.929265Z[0m [31mERROR[0m [2mzeroclaw::daemon::dreaming[0m[2m:[0m Dreaming: Failed to consolidate memory: error at 3:1: expected CONSTRUCT
-[2m2026-02-19T17:53:11.929284Z[0m [32m INFO[0m [2mzeroclaw::daemon::dreaming[0m[2m:[0m 💤 Dreaming cycle complete.
-[2m2026-02-19T17:53:11.930402Z[0m [33m WARN[0m [2mzeroclaw::memory[0m[2m:[0m Synapse backend initialization failed; falling back to sqlite [3mbackend[0m[2m=[0m"synapse" [3merror[0m[2m=[0mIO error: lock hold by current process, acquire time 1771523591 acquiring thread 1815632: /root/.zeroclaw/workspace/zeroclaw/LOCK: No locks available
-[2m2026-02-19T17:53:11.930418Z[0m [33m WARN[0m [2mzeroclaw::memory[0m[2m:[0m Synapse backend initialization failed; falling back to sqlite [3mbackend[0m[2m=[0m"synapse" [3merror[0m[2m=[0mIO error: lock hold by current process, acquire time 1771523591 acquiring thread 1815632: /root/.zeroclaw/workspace/zeroclaw/LOCK: No locks available
-🦀 ZeroClaw Gateway listening on http://127.0.0.1:3000
-  POST /pair      — pair a new client (X-Pairing-Code header)
-  POST /webhook   — {"message": "your prompt"}
-  GET  /health    — health check
-
-  🔐 PAIRING REQUIRED — use this one-time code:
-     ┌──────────────┐
-     │  079500  │
-     └──────────────┘
-     Send: POST /pair with header X-Pairing-Code: 079500
-  Press Ctrl+C to stop.
-
+[2m2026-02-19T18:04:10.012917Z[0m [32m INFO[0m [2mzeroclaw::providers::reliable[0m[2m:[0m Warming up provider connection pool [3mprovider[0m[2m=[0m"deepseek"
   🧩 Skills:   CONTRIBUTING, SKILL_TEMPLATE
 🦀 ZeroClaw Channel Server
   🤖 Model:    deepseek-chat
@@ -32,4 +14,18 @@ WARNING: Failed to initialize default vector store for namespace 'zeroclaw': HF_
   Listening for messages... (Ctrl+C to stop)
 
   🚦 In-flight message limit: 8
-[2m2026-02-19T17:53:11.931645Z[0m [32m INFO[0m [2mzeroclaw::channels::telegram[0m[2m:[0m Telegram channel listening for messages...
+[2m2026-02-19T18:04:10.013362Z[0m [32m INFO[0m [2mzeroclaw::channels::telegram[0m[2m:[0m Telegram channel listening for messages...
+🦀 ZeroClaw Gateway listening on http://127.0.0.1:3000
+  POST /pair      — pair a new client (X-Pairing-Code header)
+  POST /webhook   — {"message": "your prompt"}
+  GET  /health    — health check
+
+  🔐 PAIRING REQUIRED — use this one-time code:
+     ┌──────────────┐
+     │  409835  │
+     └──────────────┘
+     Send: POST /pair with header X-Pairing-Code: 409835
+  Press Ctrl+C to stop.
+
+[2m2026-02-19T18:04:10.014767Z[0m [32m INFO[0m [2mzeroclaw::daemon::dreaming[0m[2m:[0m 💤 Dreaming: Starting memory consolidation cycle...
+[2m2026-02-19T18:04:10.015697Z[0m [32m INFO[0m [2mzeroclaw::daemon::dreaming[0m[2m:[0m 💤 Dreaming cycle complete.
