@@ -427,12 +427,20 @@ fn extract_json_values(input: &str) -> Vec<serde_json::Value> {
         return values;
     }
 
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+    // Handle markdown code blocks often used by models inside tool tags
+    let clean_json = if trimmed.starts_with("```") {
+        let t1 = trimmed.trim_start_matches("```json").trim_start_matches("```");
+        t1.trim_end_matches("```").trim()
+    } else {
+        trimmed
+    };
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(clean_json) {
         values.push(value);
         return values;
     }
 
-    let char_positions: Vec<(usize, char)> = trimmed.char_indices().collect();
+    let char_positions: Vec<(usize, char)> = clean_json.char_indices().collect();
     let mut idx = 0;
     while idx < char_positions.len() {
         let (byte_idx, ch) = char_positions[idx];
@@ -506,8 +514,65 @@ fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) {
         let after_open = &remaining[start + open_tag.len()..];
         if let Some(close_idx) = after_open.find(close_tag) {
             let inner = &after_open[..close_idx];
+            
+            // Clean inner content of markdown code blocks before extraction
+            let inner_trimmed = inner.trim();
+            let clean_inner = if inner_trimmed.starts_with("```") {
+                let t1 = inner_trimmed.trim_start_matches("```json").trim_start_matches("```");
+                t1.trim_end_matches("```").trim()
+            } else {
+                inner_trimmed
+            };
+
+            // Handle nested tags (e.g. <tool_call><shell>{...}</shell></tool_call>)
+            // DeepSeek sometimes doubles up headers or puts the tool name as a tag
+            let final_json_str = if clean_inner.starts_with('<') && clean_inner.contains('>') {
+                if let Some(start_tag_end) = clean_inner.find('>') {
+                     let outer_tag_name = &clean_inner[1..start_tag_end];
+                     let tag_name = &clean_inner[1..start_tag_end];
+                     // simplified check: just find the matching close tag or assume content is between first > and last <
+                     if let Some(last_open) = clean_inner.rfind('<') {
+                         if last_open > start_tag_end {
+                             &clean_inner[start_tag_end+1..last_open]
+                         } else {
+                             clean_inner
+                         }
+                     } else {
+                         clean_inner
+                     }
+                } else {
+                    clean_inner
+                }
+            } else {
+                clean_inner
+            };
+
             let mut parsed_any = false;
-            let json_values = extract_json_values(inner);
+                // Special case: if we found a tool-specific tag (like <shell>, <file_read>, etc.)
+                // and the JSON doesn't have a "name" field, construct the tool call manually
+                if !outer_tag_name.is_empty() && outer_tag_name != "tool_call" && outer_tag_name != "toolcall" && outer_tag_name != "tool-call" {
+                    // Check if this looks like a tool-specific tag
+                    let is_tool_tag = !outer_tag_name.contains(' ') && !outer_tag_name.contains('/') && !outer_tag_name.contains('\\');
+                    
+                    if is_tool_tag && value.is_object() {
+                        let obj = value.as_object().unwrap();
+                        // If the JSON doesn't have a "name" field, assume it's the arguments
+                        if !obj.contains_key("name") {
+                            let mut tool_call_obj = serde_json::Map::new();
+                            tool_call_obj.insert("name".to_string(), serde_json::Value::String(outer_tag_name.to_string()));
+                            tool_call_obj.insert("arguments".to_string(), value.clone());
+                            
+                            let tool_call_value = serde_json::Value::Object(tool_call_obj);
+                            let parsed_calls = parse_tool_calls_from_json_value(&tool_call_value);
+                            if !parsed_calls.is_empty() {
+                                parsed_any = true;
+                                calls.extend(parsed_calls);
+                                continue;
+                            }
+                        }
+                    }
+                }
+            let json_values = extract_json_values(final_json_str);
             for value in json_values {
                 let parsed_calls = parse_tool_calls_from_json_value(&value);
                 if !parsed_calls.is_empty() {
@@ -517,7 +582,7 @@ fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) {
             }
 
             if !parsed_any {
-                tracing::warn!("Malformed <tool_call> JSON: expected tool-call object in tag body");
+                tracing::warn!("Malformed <tool_call> JSON: expected tool-call object in tag body. Content: {:?}", inner);
             }
 
             remaining = &after_open[close_idx + close_tag.len()..];
@@ -661,6 +726,46 @@ pub(crate) async fn run_tool_call_loop(
                         let response_text = resp.text_or_empty().to_string();
                         let mut calls = parse_structured_tool_calls(&resp.tool_calls);
                         let mut parsed_text = String::new();
+
+                        // If no direct tool calls, check if text payload is actually a serialized JSON response
+                        // This happens with OpenAiCompatibleProvider native tool support
+                        if calls.is_empty() {
+                            let text_str = response_text.trim();
+                            let clean_text = if text_str.starts_with("```") {
+                                let t1 = text_str.trim_start_matches("```json").trim_start_matches("```");
+                                t1.trim_end_matches("```").trim()
+                            } else {
+                                text_str
+                            };
+
+                            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(clean_text) {
+                                if let Some(tool_calls_arr) =
+                                    json_val.get("tool_calls").and_then(|tc| tc.as_array())
+                                {
+                                    if !tool_calls_arr.is_empty() {
+                                        let mut extracted_calls = Vec::new();
+                                        for tc_val in tool_calls_arr {
+                                            if let Ok(tc) = serde_json::from_value::<
+                                                crate::providers::ToolCall,
+                                            >(tc_val.clone())
+                                            {
+                                                extracted_calls.push(tc);
+                                            }
+                                        }
+                                        if !extracted_calls.is_empty() {
+                                            calls = parse_structured_tool_calls(&extracted_calls);
+                                            if let Some(content_str) =
+                                                json_val.get("content").and_then(|c| c.as_str())
+                                            {
+                                                parsed_text = content_str.to_string();
+                                            } else {
+                                                parsed_text = String::new();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
 
                         if calls.is_empty() {
                             let (fallback_text, fallback_calls) = parse_tool_calls(&response_text);
@@ -1446,7 +1551,9 @@ pub async fn process_message(config: Config, message: &str) -> Result<String> {
         Some(&config.identity),
         bootstrap_max_chars,
     );
-    system_prompt.push_str(&build_tool_instructions(&tools_registry));
+    if !provider.supports_native_tools() {
+        system_prompt.push_str(&build_tool_instructions(&tools_registry));
+    }
 
     let mem_context = build_context(mem.as_ref(), message).await;
     let rag_limit = if config.agent.compact_context { 2 } else { 5 };

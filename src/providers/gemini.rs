@@ -253,6 +253,48 @@ impl GeminiProvider {
 }
 
 #[async_trait]
+
+// Fix Gemini's non-standard tool call format (e.g., <shell>{"command": "ls"}</shell>)
+fn fix_gemini_response(response: &str) -> String {
+    use regex::Regex;
+    use serde_json::{json, Value};
+    
+    // Pattern to find tool-specific tags
+    let re = Regex::new(r"<([a-zA-Z_][a-zA-Z0-9_]*)>\s*(\{.*?\})\s*</\1>").unwrap();
+    let mut fixed = response.to_string();
+    
+    // Find and replace all tool-specific tags
+    for cap in re.captures_iter(response) {
+        let tag_name = &cap[1];
+        let json_content = &cap[2];
+        
+        // Skip if it's already a tool_call tag
+        if tag_name != "tool_call" && tag_name != "toolcall" && tag_name != "tool-call" {
+            // Try to parse JSON
+            if let Ok(json_value) = serde_json::from_str::<Value>(json_content) {
+                // If JSON already has "name" field, leave it as is
+                if json_value.get("name").is_some() {
+                    continue;
+                }
+                
+                // Convert to standard tool_call format
+                let tool_call = json!({
+                    "name": tag_name,
+                    "arguments": json_value
+                });
+                
+                let replacement = format!("<tool_call>\n{}\n</tool_call>", 
+                    serde_json::to_string_pretty(&tool_call).unwrap_or_default());
+                
+                // Replace in the fixed response
+                let original_tag = format!("<{}>{}</{}>", tag_name, json_content, tag_name);
+                fixed = fixed.replace(&original_tag, &replacement);
+            }
+        }
+    }
+    
+    fixed
+}
 impl Provider for GeminiProvider {
     async fn chat_with_system(
         &self,
@@ -314,12 +356,18 @@ impl Provider for GeminiProvider {
         }
 
         // Extract text from response
-        result
+        let raw_text = result
             .candidates
             .and_then(|c| c.into_iter().next())
             .and_then(|c| c.content.parts.into_iter().next())
             .and_then(|p| p.text)
-            .ok_or_else(|| anyhow::anyhow!("No response from Gemini"))
+            .ok_or_else(|| anyhow::anyhow!("No response from Gemini"))?;
+
+        // Fix Gemini's tool call format
+        let fixed_text = fix_gemini_response(&raw_text);
+        
+        Ok(fixed_text)
+    }
     }
 }
 
