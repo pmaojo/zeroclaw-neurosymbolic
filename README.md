@@ -199,9 +199,9 @@ Every subsystem is a **trait** — swap implementations with a config change, ze
 | Subsystem | Trait | Ships with | Extend |
 |-----------|-------|------------|--------|
 | **AI Models** | `Provider` | 23+ providers (OpenRouter, Anthropic, OpenAI, Ollama, Venice, Groq, Mistral, xAI, DeepSeek, Together, Fireworks, Perplexity, Cohere, Bedrock, Astrai, etc.) | `custom:https://your-api.com` — any OpenAI-compatible API |
-| **Channels** | `Channel` | CLI, Telegram, Discord, Slack, Mattermost, iMessage, Matrix, WhatsApp, Webhook | Any messaging API |
+| **Channels** | `Channel` | CLI, Telegram, Discord, Slack, Mattermost, iMessage, Matrix, WhatsApp, Webhook, Email, Signal, IRC, Lark, DingTalk, QQ | Any messaging API |
 | **Memory** | `Memory` | SQLite with hybrid search (FTS5 + vector cosine similarity), Lucid bridge (CLI sync + SQLite fallback), Markdown | Any persistence backend |
-| **Tools** | `Tool` | shell, file_read, file_write, memory_store, memory_recall, memory_forget, browser_open (Brave + allowlist), browser (agent-browser / rust-native), composio (optional) | Any capability |
+| **Tools** | `Tool` | shell, file_read, file_write, memory_store, memory_recall, memory_forget, browser_open, browser (agent-browser / rust-native), composio (optional), cron_*, schedule, git, http_request, screenshot, image_info, pushover, delegate, hardware_* | Any capability |
 | **Observability** | `Observer` | Noop, Log, Multi | Prometheus, OTel |
 | **Runtime** | `RuntimeAdapter` | Native, Docker (sandboxed) | WASM (planned; unsupported kinds fail fast) |
 | **Security** | `SecurityPolicy` | Gateway pairing, sandbox, allowlists, rate limits, filesystem scoping, encrypted secrets | — |
@@ -252,6 +252,14 @@ keyword_weight = 0.3
 # ZEROCLAW_LUCID_STORE_TIMEOUT_MS=800        # async sync timeout for lucid store
 # ZEROCLAW_LUCID_FAILURE_COOLDOWN_MS=15000   # cooldown after lucid failure to avoid repeated slow attempts
 ```
+
+### Hardware & Peripherals
+
+ZeroClaw interacts with the physical world via the `Peripheral` trait.
+
+- **Supported Boards:** STM32 (Nucleo-F401RE, etc.), Arduino (Uno, Nano, etc.), Raspberry Pi (GPIO).
+- **Commands:** `zeroclaw peripheral list`, `zeroclaw peripheral add`, `zeroclaw peripheral flash`.
+- **Hardware RAG:** Automatically ingests datasheets (`.md`, `.txt`, optional `.pdf`) to map natural language pin queries (e.g. "red led") to physical pins (e.g. "Pin 13").
 
 ## Security
 
