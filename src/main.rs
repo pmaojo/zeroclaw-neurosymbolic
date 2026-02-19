@@ -422,7 +422,7 @@ async fn main() -> Result<()> {
         .await??;
         // Auto-start channels if user said yes during wizard
         if std::env::var("ZEROCLAW_AUTOSTART_CHANNELS").as_deref() == Ok("1") {
-            channels::start_channels(config).await?;
+            channels::start_channels(config, None).await?;
         }
         return Ok(());
     }
@@ -452,7 +452,7 @@ async fn main() -> Result<()> {
             } else {
                 info!("🚀 Starting ZeroClaw Gateway on {host}:{port}");
             }
-            gateway::run_gateway(&host, port, config).await
+            gateway::run_gateway(&host, port, config, None).await
         }
 
         Commands::Daemon { port, host } => {
@@ -592,7 +592,7 @@ async fn main() -> Result<()> {
         Commands::Doctor => doctor::run(&config),
 
         Commands::Channel { channel_command } => match channel_command {
-            ChannelCommands::Start => channels::start_channels(config).await,
+            ChannelCommands::Start => channels::start_channels(config, None).await,
             ChannelCommands::Doctor => channels::doctor_channels(config).await,
             other => channels::handle_command(other, &config),
         },

@@ -633,10 +633,20 @@ impl SynapseStore {
         Ok(expanded)
     }
 
-    pub fn query_sparql(&self, query: &str) -> Result<String> {
+    pub fn query_sparql(&self, query_str: &str) -> Result<String> {
         use oxigraph::sparql::QueryResults;
 
-        let results = self.store.query(query)?;
+        let is_update = {
+            let q = query_str.to_uppercase();
+            q.contains("INSERT") || q.contains("DELETE") || q.contains("LOAD") || q.contains("CLEAR") || q.contains("CREATE") || q.contains("DROP") || q.contains("COPY") || q.contains("MOVE") || q.contains("ADD")
+        };
+
+        if is_update {
+            self.store.update(query_str)?;
+            return Ok("OK".to_string());
+        }
+
+        let results = self.store.query(query_str)?;
 
         match results {
             QueryResults::Solutions(solutions) => {

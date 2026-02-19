@@ -94,11 +94,11 @@ impl VectorStore for SqliteVectorStoreAdapter {
         Ok(search_results)
     }
 
-    fn get_id(&self, _key: &str) -> Option<usize> {
+    async fn get_id(&self, _key: &str) -> anyhow::Result<Option<usize>> {
         // Not used by SqliteMemory based implementation effectively
         // Returning None forces SynapseStore to call `add` if it checks.
         // But since we implement add as upsert, it is safe.
-        None
+        Ok(None)
     }
 
     fn flush(&self) -> anyhow::Result<()> {
@@ -605,7 +605,7 @@ impl Memory for SynapseMemory {
         {
             // Hybrid search: Vector + Graph
             // We search for nodes relevant to the query
-            let results = self.store.hybrid_search(query, limit, 1).await?;
+            let results = self.store.hybrid_search(query, limit, 1, true, 0.7).await?;
 
             let mut entries = Vec::new();
             if !results.is_empty() {
@@ -773,7 +773,7 @@ impl Memory for SynapseMemory {
 
             let results = self
                 .store
-                .hybrid_search(&query.text, query.limit, 1)
+                .hybrid_search(&query.text, query.limit, 1, true, 0.7)
                 .await?;
             let mut search_results = Vec::new();
 

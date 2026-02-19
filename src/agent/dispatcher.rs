@@ -161,7 +161,7 @@ pub struct NativeToolDispatcher;
 impl ToolDispatcher for NativeToolDispatcher {
     fn parse_response(&self, response: &ChatResponse) -> (String, Vec<ParsedToolCall>) {
         let text = response.text.clone().unwrap_or_default();
-        let calls = response
+        let mut calls: Vec<ParsedToolCall> = response
             .tool_calls
             .iter()
             .map(|tc| ParsedToolCall {
@@ -171,7 +171,19 @@ impl ToolDispatcher for NativeToolDispatcher {
                 tool_call_id: Some(tc.id.clone()),
             })
             .collect();
-        (text, calls)
+
+        // Fallback: If no native tool calls or as an addition, check for XML tags in text.
+        // DeepSeek and others often mix these or use them as a fallback.
+        let (filtered_text, xml_calls) = XmlToolDispatcher::parse_xml_tool_calls(&text);
+        for mut xc in xml_calls {
+            // Assign a random ID if missing for native-compatible flow
+            if xc.tool_call_id.is_none() {
+                xc.tool_call_id = Some(uuid::Uuid::new_v4().to_string());
+            }
+            calls.push(xc);
+        }
+
+        (filtered_text, calls)
     }
 
     fn format_results(&self, results: &[ToolExecutionResult]) -> ConversationMessage {

@@ -194,7 +194,7 @@ pub struct AppState {
 
 /// Run the HTTP gateway using axum with proper HTTP/1.1 compliance.
 #[allow(clippy::too_many_lines)]
-pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
+pub async fn run_gateway(host: &str, port: u16, config: Config, memory_shared: Option<Arc<dyn Memory>>) -> Result<()> {
     // ── Security: refuse public bind without tunnel or explicit opt-in ──
     if is_public_bind(host) && config.tunnel.provider == "none" && !config.gateway.allow_public_bind
     {
@@ -222,11 +222,14 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .clone()
         .unwrap_or_else(|| "anthropic/claude-sonnet-4".into());
     let temperature = config.default_temperature;
-    let mem: Arc<dyn Memory> = Arc::from(memory::create_memory(
-        &config.memory,
-        &config.workspace_dir,
-        config.api_key.as_deref(),
-    )?);
+    let mem: Arc<dyn Memory> = match memory_shared {
+        Some(m) => m,
+        None => Arc::from(memory::create_memory(
+            &config.memory,
+            &config.workspace_dir,
+            config.api_key.as_deref(),
+        )?),
+    };
     let runtime: Arc<dyn runtime::RuntimeAdapter> =
         Arc::from(runtime::create_runtime(&config.runtime)?);
     let security = Arc::new(SecurityPolicy::from_config(

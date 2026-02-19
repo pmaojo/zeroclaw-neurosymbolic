@@ -40,15 +40,12 @@ impl DreamingEngine {
         // We look for patterns where ?s ?p ?o1 AND ?s ?p ?o2 AND ?o1 != ?o2
         // AND ?p is marked as FunctionalProperty in ontology
 
-        let query = r#"
-            SELECT ?s ?p ?o1 ?o2 WHERE {
-                ?p <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#FunctionalProperty> .
-                ?s ?p ?o1 .
-                ?s ?p ?o2 .
-                FILTER (?o1 != ?o2)
-            }
-            LIMIT 100
-        "#;
+        let query = "SELECT ?s ?p ?o1 ?o2 WHERE { \
+                 ?p <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#FunctionalProperty> . \
+                 ?s ?p ?o1 . \
+                 ?s ?p ?o2 . \
+                 FILTER (?o1 != ?o2) \
+             } LIMIT 100";
 
         let result_json = self.memory.query_sparql(query).await?;
         let rows: Vec<serde_json::Value> = serde_json::from_str(&result_json)?;
@@ -68,18 +65,13 @@ impl DreamingEngine {
         // Garbage Collection: Remove nodes marked as 'Draft' older than 24 hours
         // This keeps the graph clean from temporary thought bubbles
 
-        let query = r#"
-            DELETE {
-                ?s ?p ?o .
-            }
-            WHERE {
-                ?s <http://zeroclaw.ai/schema#status> "Draft" .
-                ?s <http://zeroclaw.ai/schema#createdAt> ?date .
-                ?s ?p ?o .
-                BIND(NOW() - "P1D"^^<http://www.w3.org/2001/XMLSchema#duration> AS ?threshold)
-                FILTER (?date < ?threshold)
-            }
-        "#;
+        let query = "DELETE { ?s ?p ?o . } WHERE { \
+                 ?s <http://zeroclaw.ai/schema#status> \"Draft\" . \
+                 ?s <http://zeroclaw.ai/schema#createdAt> ?date . \
+                 ?s ?p ?o . \
+                 BIND(NOW() - \"P1D\"^^<http://www.w3.org/2001/XMLSchema#duration> AS ?threshold) \
+                 FILTER (?date < ?threshold) \
+             }";
 
         // Note: DELETE/INSERT support depends on the backend's SPARQL Update capability.
         // Synapse/Oxigraph supports SPARQL 1.1 Update.

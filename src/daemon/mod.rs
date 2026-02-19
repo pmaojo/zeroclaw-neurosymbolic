@@ -5,6 +5,8 @@ use anyhow::Result;
 use chrono::Utc;
 use std::future::Future;
 use std::path::PathBuf;
+use std::sync::Arc;
+use crate::memory::Memory;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 
@@ -25,25 +27,26 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
                 .await;
     }
 
+    let memory: Arc<dyn Memory> = Arc::from(crate::memory::create_memory(
+        &config.memory,
+        &config.workspace_dir,
+        config.api_key.as_deref(),
+    )?);
+
     let mut handles: Vec<JoinHandle<()>> = vec![spawn_state_writer(config.clone())];
 
     // ── Dreaming Engine Supervisor ───────────────────────────────
     // Always started if memory-synapse is enabled, acts as background garbage collector
     #[cfg(feature = "memory-synapse")]
     {
-        let dreaming_cfg = config.clone();
+        let dreaming_mem = memory.clone();
         handles.push(spawn_component_supervisor(
             "dreaming",
             initial_backoff,
             max_backoff,
             move || {
-                let cfg = dreaming_cfg.clone();
+                let mem = dreaming_mem.clone();
                 async move {
-                    let mem = std::sync::Arc::from(crate::memory::create_memory(
-                        &cfg.memory,
-                        &cfg.workspace_dir,
-                        cfg.api_key.as_deref(),
-                    )?);
                     crate::daemon::dreaming::DreamingEngine::new(mem).run().await
                 }
             },
@@ -53,6 +56,7 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
     {
         let gateway_cfg = config.clone();
         let gateway_host = host.clone();
+        let gateway_mem = memory.clone();
         handles.push(spawn_component_supervisor(
             "gateway",
             initial_backoff,
@@ -60,7 +64,8 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
             move || {
                 let cfg = gateway_cfg.clone();
                 let host = gateway_host.clone();
-                async move { crate::gateway::run_gateway(&host, port, cfg).await }
+                let mem = gateway_mem.clone();
+                async move { crate::gateway::run_gateway(&host, port, cfg, Some(mem)).await }
             },
         ));
     }
@@ -68,13 +73,15 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
     {
         if has_supervised_channels(&config) {
             let channels_cfg = config.clone();
+            let channels_mem = memory.clone();
             handles.push(spawn_component_supervisor(
                 "channels",
                 initial_backoff,
                 max_backoff,
                 move || {
                     let cfg = channels_cfg.clone();
-                    async move { crate::channels::start_channels(cfg).await }
+                    let mem = channels_mem.clone();
+                    async move { crate::channels::start_channels(cfg, Some(mem)).await }
                 },
             ));
         } else {

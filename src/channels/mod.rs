@@ -949,7 +949,7 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
 
 /// Start all configured channels and route messages to the agent
 #[allow(clippy::too_many_lines)]
-pub async fn start_channels(config: Config) -> Result<()> {
+pub async fn start_channels(config: Config, memory_shared: Option<Arc<dyn Memory>>) -> Result<()> {
     let provider_name = config
         .default_provider
         .clone()
@@ -980,11 +980,14 @@ pub async fn start_channels(config: Config) -> Result<()> {
         .clone()
         .unwrap_or_else(|| "anthropic/claude-sonnet-4-20250514".into());
     let temperature = config.default_temperature;
-    let mem: Arc<dyn Memory> = Arc::from(memory::create_memory(
-        &config.memory,
-        &config.workspace_dir,
-        config.api_key.as_deref(),
-    )?);
+    let mem: Arc<dyn Memory> = match memory_shared {
+        Some(m) => m,
+        None => Arc::from(memory::create_memory(
+            &config.memory,
+            &config.workspace_dir,
+            config.api_key.as_deref(),
+        )?),
+    };
     let (composio_key, composio_entity_id) = if config.composio.enabled {
         (
             config.composio.api_key.as_deref(),
